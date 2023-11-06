@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import asyncio
 import spade
 from spade.agent import Agent
@@ -9,7 +10,7 @@ from spade.template import Template
 from spade.message import Message
 
 SIZE = 15
-HEIGHT = 25
+HEIGHT = SIZE
 
 airports = [
             [0, 1, 0, 'E'], [1, 0, 0, 'E'], [1, 1, 0, 'E'],
@@ -26,7 +27,7 @@ for y in range(6, 8):
             environment_matrix[y][x][z] = 'X'
 
 
-for z in range(20, HEIGHT):
+for z in range(HEIGHT-3, HEIGHT):
     environment_matrix[0][7][z] = 'X'
     environment_matrix[0][8][z] = 'X'
     environment_matrix[0][9][z] = 'X'
@@ -35,13 +36,13 @@ for z in range(20, HEIGHT):
     environment_matrix[1][8][z] = 'X'
 
 
-for z in range(15):
+for z in range(5):
     environment_matrix[9][9][z] = 'X'
     environment_matrix[9][11][z] = 'X'
     environment_matrix[11][9][z] = 'X'
     environment_matrix[11][11][z] = 'X'
 
-for z in range(20):
+for z in range(10):
     environment_matrix[9][10][z] = 'X'
     environment_matrix[10][9][z] = 'X'
     environment_matrix[10][11][z] = 'X'
@@ -108,6 +109,7 @@ class Environment:
 
 
     def print_environment(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
         for i in range(SIZE):
             line = ""
             for j in range(SIZE):
@@ -116,7 +118,7 @@ class Environment:
 
 
 
-class airspace_manager(Agent):
+class AirSpaceManager(Agent):
 
     def __init__(self, jid, password, environment):
         super().__init__(jid, password)
@@ -128,17 +130,22 @@ class airspace_manager(Agent):
         class monitor_airspace_behaviour(CyclicBehaviour):
 
             async def run(self):
-
-                empty_spaces = self.get_empty_spaces()
+                print("receiving")
+                #empty_spaces = self.get_empty_spaces()
                 #airplanes = self.get_aircraft_positions()
-                airports = self.get_aiports()
+                #airports = self.get_aiports()
+
+                msg = await self.receive(timeout=10)
+                print(msg)
+                if msg:
+                    print(f"Message received with content: {msg.body}")
 
 
             def get_aiports(self):
-                return environment.airports
+                return self.agent.environment.airports
 
             def get_empty_spaces(self):
-                return environment.get_airports_empty_spaces()
+                return self.agent.environment.get_airports_empty_spaces()
 
         self.add_behaviour(monitor_airspace_behaviour())
 
@@ -149,49 +156,29 @@ class AircraftAgent(Agent):
         super().__init__(jid, password)
         self.environment = environment
         self.position = position
+        self.on_land = True
 
 
     async def setup(self):
         # Define a behavior to interact with the environment and air traffic control
-        class AircraftInteraction(CyclicBehaviour):
+        class Fly(CyclicBehaviour):
             async def run(self):
-                print("AircraftInteraction behavior is running")
-
-                # update aircraft position
-                self.agent.environment.update_aircraft_position(self.agent.jid, self.agent.position)
+                if self.agent.on_land:
 
 
-
-                # Communicate with air traffic control
-                await self.send_instruction_to_atc(self.agent.position)
+                    await self.start_flying(self.agent.position)
 
 
-            async def send_instruction_to_atc(self, position):
+            async def start_flying(self, position):
                 # Create an ACL message to send data to the air traffic control agent
                 msg = Message(to="atc_agent@localhost")  # Replace with the correct ATC agent JID
-                msg.set_metadata("performative", "inform")
-                msg.body = f"Aircraft at position {position} requesting instructions."
+                msg.set_metadata("performative", "query")
+                msg.body = f"0001 {position}"
 
                 # Send the message
+                print(f"Sending this {msg.body}")
                 await self.send(msg)
-
-
-
-
-
-
-class aircraft_agent(Agent):
-
-    class flying(CyclicBehaviour):
-        async def on_start(self):
-            pass
-        
-        async def run(self):
-            pass
-
-    async def setup(self):
-
-        pass
+        self.add_behaviour(Fly())
 
 
 
@@ -200,22 +187,21 @@ class aircraft_agent(Agent):
 
 
 
+async def main():
+    environment = Environment(environment_matrix)
+    environment.update_matrix()
+    # environment.fill_airport_space([27, 1, 0, 'E'])
+    # environment.add_airplane([27, 1, 0, 'E'])
+    # print(environment.airports)
+    environment.print_environment()
 
+    aircraft_agent = AircraftAgent("aircraft_agent@localhost", "password", environment, [0, 1, 0])
+    await aircraft_agent.start(auto_register=True)
 
-
-
-
-
-
+    airspace_manager = AirSpaceManager("atc_agent@localhost", "password", environment)
+    await airspace_manager.start(auto_register=True)
 
 
 if __name__ == "__main__":
-
-    environment = Environment(environment_matrix)
-    environment.update_matrix()
-    #environment.fill_airport_space([27, 1, 0, 'E'])
-    #environment.add_airplane([27, 1, 0, 'E'])
-    #print(environment.airports)
-    environment.print_environment()
-
+    spade.run(main())
 
