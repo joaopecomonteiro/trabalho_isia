@@ -1,110 +1,102 @@
 import numpy as np
 import os
+import re
+import ast
+import random
 import asyncio
 import spade
 from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour
 from spade.behaviour import FSMBehaviour
 from spade.behaviour import State
+from spade.behaviour import OneShotBehaviour
 from spade.template import Template
 from spade.message import Message
 
-SIZE = 15
-HEIGHT = SIZE
+SIZE = 7
+HEIGHT = 4
 
-airports = [
-            [0, 1, 0, 'E'], [1, 0, 0, 'E'], [1, 1, 0, 'E'],
-            [14, 0, 0, 'E'], [14, 1, 0, 'E'], [14, 2, 0, 'E'],
-            [0, 14, 0, 'E'], [1, 13, 0, 'E'], [2, 12, 0, 'E'],
-            [14, 13, 0, 'E'], [13, 14, 0, 'E']
-            ]
 
 environment_matrix = np.zeros((SIZE, SIZE, HEIGHT)).astype(int).astype(str)
 
-for y in range(6, 8):
-    for x in range(0, 4):
+
+for y in range(SIZE): #Proibir o chão
+    for x in range(SIZE):
+        #print(environment_matrix[y][x][0])
+        if environment_matrix[y][x][0] == '0':
+            environment_matrix[y][x][0] = 'X'
+
+
+for y in range(2, 4): #Criar o aeroporto militar
+    for x in range(0, 2):
         for z in range(HEIGHT):
             environment_matrix[y][x][z] = 'X'
 
 
-for z in range(HEIGHT-3, HEIGHT):
-    environment_matrix[0][7][z] = 'X'
-    environment_matrix[0][8][z] = 'X'
-    environment_matrix[0][9][z] = 'X'
-    environment_matrix[1][6][z] = 'X'
-    environment_matrix[1][7][z] = 'X'
-    environment_matrix[1][8][z] = 'X'
+environment_matrix[0][3][HEIGHT-1] = 'X' #Criar a nuvem
+environment_matrix[0][4][HEIGHT-1] = 'X'
 
 
-for z in range(5):
-    environment_matrix[9][9][z] = 'X'
-    environment_matrix[9][11][z] = 'X'
-    environment_matrix[11][9][z] = 'X'
-    environment_matrix[11][11][z] = 'X'
+for y in range(2, 5): #Criar montanha
+    for x in range(4, 7):
+        environment_matrix[y][x][1] = 'X'
+environment_matrix[2][5][2] = 'X'
+environment_matrix[3][4][2] = 'X'
+environment_matrix[3][5][2] = 'X'
+environment_matrix[3][6][2] = 'X'
+environment_matrix[4][5][2] = 'X'
+environment_matrix[3][5][3] = 'X'
 
-for z in range(10):
-    environment_matrix[9][10][z] = 'X'
-    environment_matrix[10][9][z] = 'X'
-    environment_matrix[10][11][z] = 'X'
-    environment_matrix[11][10][z] = 'X'
 
-for z in range(HEIGHT):
-    environment_matrix[10][10][z] = 'X'
+
+class Airport:
+    def __init__(self, position, idx, empty=True, airplane=None):
+        self.position = position
+        self.idx = idx
+        self.empty = empty
+        self.airplane = None
+
+    def is_empty(self):
+        return self.empty
+
+    def to_empty(self):
+        self.empty = True
+        self.airplane = None
+
+    def to_full(self, airplane):
+        self.empty = False
+        self.airplane = airplane
+
 
 
 
 
 class Environment:
-    def __init__(self, matrix):
+    def __init__(self, matrix, airports):
         self.matrix = matrix
-        self.airports = []
+        self.airports = airports
         self.aircraft_positions = {}
 
-    def get_aircraft_position(self):
-        #
-        pass
 
-
-    def update_aircraft_position(self, aircraft_id, position):
-        self.aircraft_positions[aircraft_id] = position
-        print(self.aircraft_positions)
-
-
-    def update_matrix(self):
-        for airport in airports:
-            #print(airport)
-            self.airports.append(airport)
-            self.matrix[airport[0]][airport[1]][airport[2]] = airport[3]
-
-
-    def get_airports_empty_spaces(self):
-        empty_spaces = []
+    def build_airports(self):
         for airport in self.airports:
-            for space in airport:
-                if space[3] == 'E':
-                    empty_spaces.append(space)
-        return empty_spaces
+            if airport.is_empty():
+                environment_matrix[airport.position[0]][airport.position[1]][airport.position[2]] = 'E'
+            else:
+                environment_matrix[airport.position[0]][airport.position[1]][airport.position[2]] = 'F'
 
 
-    def fill_airport_space(self, space_to_fill):
+    def get_empty_airports(self):
+        empty_airports = []
         for airport in self.airports:
-            for space in airport:
-                if space == space_to_fill:
-                    #print(space[3])
-                    space[3] = 'F'
-        self.update_matrix()
+            if airport.is_empty():
+                empty_airports.append(airport)
+        return empty_airports
 
-    def empty_airport_space(self, space_to_empty):
-        for airport in self.airports:
-            for space in airport:
-                if space == space_to_empty:
-                    #print(space[3])
-                    space[3] = 'E'
-        self.update_matrix()
 
-    #def add_airplane(self, space):
-    #    self.fill_airport_space(space)
-    #    self.airplanes.append([space[0], space[1], space[2]])
+
+
+
 
 
 
@@ -115,6 +107,9 @@ class Environment:
             for j in range(SIZE):
                 line += str(self.matrix[i][j][0]) + " "
             print(line)
+
+
+
 
 
 
@@ -130,55 +125,101 @@ class AirSpaceManager(Agent):
         class monitor_airspace_behaviour(CyclicBehaviour):
 
             async def run(self):
-                print("receiving")
+                #print("receiving")
                 #empty_spaces = self.get_empty_spaces()
                 #airplanes = self.get_aircraft_positions()
                 #airports = self.get_aiports()
 
                 msg = await self.receive(timeout=10)
-                print(msg)
                 if msg:
-                    print(f"Message received with content: {msg.body}")
+                    #words = msg.body.split()
+                    words = re.findall(r'\(.*?\)|\w+', msg.body)
+                    #print(words)
+                    code = words[0]
+                    if code == "0001":
+                        start_position = ast.literal_eval(words[1])
+                        end_position = ast.literal_eval(words[2])
+                        print(start_position)
+                        print(end_position)
 
+                    sender_jid = str(msg.sender)
+                    response = Message(to=sender_jid)
+                    response.body = "ok"
+                    response.metadata = {"performative": "inform"}
+                    await self.send(response)
 
-            def get_aiports(self):
-                return self.agent.environment.airports
-
-            def get_empty_spaces(self):
-                return self.agent.environment.get_airports_empty_spaces()
+                #await self.agent.stop()
 
         self.add_behaviour(monitor_airspace_behaviour())
 
 
 
 class AircraftAgent(Agent):
-    def __init__(self, jid, password, environment, position):
+    def __init__(self, jid, password, environment, idx, start_airport, position, end_airport=None):
         super().__init__(jid, password)
         self.environment = environment
+        self.idx = idx
+        self.start_airport = start_airport
         self.position = position
         self.on_land = True
+        self.end_airport = end_airport
+
+        self.start_airport.to_full(self)
 
 
     async def setup(self):
-        # Define a behavior to interact with the environment and air traffic control
+
         class Fly(CyclicBehaviour):
             async def run(self):
                 if self.agent.on_land:
 
+                    empty_airports = self.agent.environment.get_empty_airports()
+                    self.agent.end_airport = random.choice(empty_airports)
+                    #print(self.agent.end_airport)
 
-                    await self.start_flying(self.agent.position)
+                    await self.start_flying(self.agent.start_airport.position, self.agent.end_airport.position)
+                    #self.agent.on_land = False
 
 
-            async def start_flying(self, position):
-                # Create an ACL message to send data to the air traffic control agent
-                msg = Message(to="atc_agent@localhost")  # Replace with the correct ATC agent JID
+            def update_position(self):
+                self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
+
+
+
+
+            async def start_flying(self, start_position, end_position):
+
+                msg = Message(to="atc_agent@localhost")
                 msg.set_metadata("performative", "query")
-                msg.body = f"0001 {position}"
+                msg.body = f"0001 {start_position} {end_position}"
 
                 # Send the message
                 print(f"Sending this {msg.body}")
                 await self.send(msg)
+
+                response = await self.receive(timeout=10)
+                if response:
+                    print(response.body)
+                    self.agent.on_land = False
+
         self.add_behaviour(Fly())
+
+
+
+class CentralCoordinationAgent(Agent):
+    def __init__(self, jid, password, environment, path=None):
+        super().__init__(jid, password)
+        self.environment = environment
+        self.path = path
+
+
+
+
+
+
+
+
+
 
 
 
@@ -188,19 +229,29 @@ class AircraftAgent(Agent):
 
 
 async def main():
-    environment = Environment(environment_matrix)
-    environment.update_matrix()
-    # environment.fill_airport_space([27, 1, 0, 'E'])
-    # environment.add_airplane([27, 1, 0, 'E'])
-    # print(environment.airports)
-    environment.print_environment()
 
-    aircraft_agent = AircraftAgent("aircraft_agent@localhost", "password", environment, [0, 1, 0])
-    await aircraft_agent.start(auto_register=True)
+    airport_1 = Airport((0, 1, 0), "airport_1")
+    airport_3 = Airport((0, 6, 0), "airport_3")
+    airport_2 = Airport((6, 0, 0), "airport_2")
+    airport_4 = Airport((6, 5, 0), "airport_4")
+
+    environment = Environment(environment_matrix, [airport_1, airport_2, airport_3, airport_4])
+    environment.build_airports()
+
+    aircraft_agent_1 = AircraftAgent("aircraft_agent_1@localhost", "password", environment, "A1", airport_1, airport_1.position)
+    await aircraft_agent_1.start(auto_register=True)
+
 
     airspace_manager = AirSpaceManager("atc_agent@localhost", "password", environment)
     await airspace_manager.start(auto_register=True)
 
+    #environment.print_environment()
+
+    """
+    aircraft_agent = AircraftAgent("aircraft_agent@localhost", "password", environment, [0, 1, 0])
+
+
+    """
 
 if __name__ == "__main__":
     spade.run(main())
