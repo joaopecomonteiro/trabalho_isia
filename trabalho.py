@@ -47,7 +47,17 @@ environment_matrix[3][6][2] = 'X'
 environment_matrix[4][5][2] = 'X'
 environment_matrix[3][5][3] = 'X'
 
+class Node:
+    def __init__(self, parent=None, position=None):
+        self.parent=parent
+        self.position = position
 
+        self.g = 0
+        self.h = 0
+        self.f = 0
+
+    def __eq__(self, other):
+        return self.position == other.position
 
 class Airport:
     def __init__(self, position, idx, empty=True, airplane=None):
@@ -113,49 +123,8 @@ class Environment:
 
 
 
-class AirSpaceManager(Agent):
-
-    def __init__(self, jid, password, environment):
-        super().__init__(jid, password)
-        self.environment = environment
-
-
-    async def setup(self):
-
-        class monitor_airspace_behaviour(CyclicBehaviour):
-
-            async def run(self):
-                #print("receiving")
-                #empty_spaces = self.get_empty_spaces()
-                #airplanes = self.get_aircraft_positions()
-                #airports = self.get_aiports()
-
-                msg = await self.receive(timeout=10)
-                if msg:
-                    #words = msg.body.split()
-                    words = re.findall(r'\(.*?\)|\w+', msg.body)
-                    #print(words)
-                    code = words[0]
-                    if code == "0001":
-                        start_position = ast.literal_eval(words[1])
-                        end_position = ast.literal_eval(words[2])
-                        print(start_position)
-                        print(end_position)
-
-                    sender_jid = str(msg.sender)
-                    response = Message(to=sender_jid)
-                    response.body = "ok"
-                    response.metadata = {"performative": "inform"}
-                    await self.send(response)
-
-                #await self.agent.stop()
-
-        self.add_behaviour(monitor_airspace_behaviour())
-
-
-
 class AircraftAgent(Agent):
-    def __init__(self, jid, password, environment, idx, start_airport, position, end_airport=None):
+    def __init__(self, jid, password, environment, idx, start_airport, position, end_airport=None, sent_msg=False):
         super().__init__(jid, password)
         self.environment = environment
         self.idx = idx
@@ -163,6 +132,7 @@ class AircraftAgent(Agent):
         self.position = position
         self.on_land = True
         self.end_airport = end_airport
+        self.sent_msg = sent_msg
 
         self.start_airport.to_full(self)
 
@@ -172,13 +142,14 @@ class AircraftAgent(Agent):
         class Fly(CyclicBehaviour):
             async def run(self):
                 if self.agent.on_land:
+                    if not self.agent.sent_msg:
+                        empty_airports = self.agent.environment.get_empty_airports()
+                        self.agent.end_airport = random.choice(empty_airports)
+                        #print(self.agent.end_airport)
 
-                    empty_airports = self.agent.environment.get_empty_airports()
-                    self.agent.end_airport = random.choice(empty_airports)
-                    #print(self.agent.end_airport)
-
-                    await self.start_flying(self.agent.start_airport.position, self.agent.end_airport.position)
-                    #self.agent.on_land = False
+                        await self.start_flying(self.agent.start_airport.position, self.agent.end_airport.position)
+                        #self.agent.sent_msg = True
+                        #self.agent.on_land = False
 
 
             def update_position(self):
@@ -194,29 +165,229 @@ class AircraftAgent(Agent):
                 msg.body = f"0001 {start_position} {end_position}"
 
                 # Send the message
-                print(f"Sending this {msg.body}")
+                print(f"AA - Sending this {msg.body}")
                 await self.send(msg)
 
-                response = await self.receive(timeout=10)
+                response = await self.receive()
                 if response:
                     print(response.body)
+                    self.agent.sent_msg = True
                     self.agent.on_land = False
 
         self.add_behaviour(Fly())
 
 
 
+
+
+
+
+
+
+
+class AirSpaceManager(Agent):
+
+    def __init__(self, jid, password, environment, aircraft_jid=None, msg_received_from_aircraft=False, msg_to_cc=None, sent_msg_to_cc=False):
+        super().__init__(jid, password)
+        self.environment = environment
+        self.aircraft_jid = aircraft_jid
+        self.msg_received_from_aircraft = msg_received_from_aircraft
+        self.msg_to_cc = msg_to_cc
+        self.sent_msg_to_cc = sent_msg_to_cc
+
+
+
+
+    async def setup(self):
+        self.add_behaviour(self.MessageWithAircraft())
+
+
+    class MessageWithAircraft(CyclicBehaviour):
+
+        async def run(self):
+
+            if not self.agent.msg_received_from_aircraft:
+                print("ASM - ok")
+                msg = await self.receive(timeout=10)
+                if msg:
+                    code = msg.body[0:4]
+                    if code == "0001":
+                        self.agent.aircraft_jid = str(msg.sender)
+                        print(self.agent.aircraft_jid)
+                        await self.tell_aircraft_msg_received()
+                        self.agent.msg_to_cc = msg.body
+                        #await self.send_msg_to_cc(msg.body)
+
+            else:
+                if not self.agent.sent_msg_to_cc:
+                    await self.send_msg_to_cc()
+
+
+
+        async def tell_aircraft_msg_received(self):
+            msg = Message(to=self.agent.aircraft_jid)
+            msg.body = "Message received"
+            self.agent.msg_received_from_aircraft = True
+            await self.send(msg)
+
+        async def send_msg_to_cc(self):
+            msg = Message(to="cc_agent@localhost")
+            msg.body = self.agent.msg_to_cc
+            await self.send(msg)
+
+            response = await self.receive()
+            if response and str(response.sender) == "cc_agent@localhost":
+                print(f"response.body: {response.body}, {str(response.sender)}")
+                self.agent.sent_msg_to_cc = True
+
+
+
+
+
+
+
+
 class CentralCoordinationAgent(Agent):
-    def __init__(self, jid, password, environment, path=None):
+    def __init__(self, jid, password, environment, path=None, msg_received=False, text=None):
         super().__init__(jid, password)
         self.environment = environment
         self.path = path
+        self.msg_received = msg_received
+        self.text = text
+
+    async def setup(self):
+
+        class GetPath(CyclicBehaviour):
+
+            async def run(self):
+                if not self.agent.msg_received:
+                    print("CC - ok")
+                    msg = await self.receive(timeout=10)
+                    if msg:
+                        print(f"CC - Got this {msg.body}")
+                        self.agent.text = msg.body
+                        self.agent.msg_received = True
+                        await self.tell_asm_msg_received()
+                else:
+                    #print("ok")
+                    words = re.findall(r'\(.*?\)|\w+', self.agent.text)
+                    code = words[0]
+                    if code == "0001":
+                        #print("okok")
+                        start_position = ast.literal_eval(words[1])
+                        end_position = ast.literal_eval(words[2])
+                        #print(f"start_position: {start_position}")
+                        #print(f"end_position: {end_position}")
+
+                        self.agent.path = self.astar(start_position, end_position)
+                        #print("dwadwadw")
+                        print(f"path: {self.agent.path}")
+                        await self.send_path_to_asm()
+
+            async def tell_asm_msg_received(self):
+                msg = Message(to="atc_agent@localhost")
+                msg.body = "Message received -d-a w-d aw--wda -wad -"
+                self.agent.msg_received = True
+                await self.send(msg)
+
+            async def send_path_to_asm(self):
+                msg = Message(to="atc_agent@localhost")
+                msg.body = str(self.agent.path)
+                """
+                ESTAVA AQUI, ACABAR MANDAR PATH PARA ASM
+                """
+
+
+
+            def astar(self, start, end):
+
+                start_node = Node(None, start)
+                start_node.g = start_node.h = start_node.f = 0
+                end_node = Node(None, end)
+                end_node.g = end_node.h = end_node.f = 0
+
+                open_list = []
+                closed_list = []
+
+                open_list.append(start_node)
+
+                while (len(open_list) > 0):
+                    current_node = open_list[0]
+                    current_index = 0
+
+                    for index, item in enumerate(open_list):
+                        if item.f < current_node.f:
+                            current_node = item
+                            current_index = index
+
+                    open_list.pop(current_index)
+                    closed_list.append(current_node)
+                    #print(len(open_list))
+                    #print(current_node.position)
+                    #print("-----------------------")
+
+                    # Found the goal
+                    if current_node == end_node:
+                        path = []
+                        current = current_node
+                        while current is not None:
+                            path.append(current.position)
+                            current = current.parent
+                        return path[::-1]  # Return reversed path
+
+                    children = []
+
+                    for i in range(-1, 2):
+                        for j in range(-1, 2):
+                            for k in range(-1, 2):
+                                node_position = (
+                                current_node.position[0] + i, current_node.position[1] + j, current_node.position[2] + k)
+
+                                if (
+                                        node_position[0] > (len(self.agent.environment.matrix) - 1)
+                                        or node_position[0] < 0
+                                        or node_position[1] > (len(self.agent.environment.matrix[len(self.agent.environment.matrix) - 1]) - 1)
+                                        or node_position[1] < 0
+                                        or node_position[2] > (len(self.agent.environment.matrix[0][0]) - 1)
+                                        or node_position[2] < 0
+                                        or node_position == current_node.position
+                                ):
+                                    continue
+
+                                if (
+                                    self.agent.environment.matrix[node_position[0]][node_position[1]][node_position[2]] != '0'
+                                    and self.agent.environment.matrix[node_position[0]][node_position[1]][node_position[2]] != 'E'
+                                ):
+                                    continue
+
+                                new_node = Node(current_node, node_position)
+
+                                children.append(new_node)
+
+                    for child in children:
+
+                        # Child is on the closed list
+                        for closed_child in closed_list:
+                            if child == closed_child:
+                                continue
+
+                        child.g = current_node.g + 1
+                        child.h = ((child.position[0] - end_node.position[0]) ** 2) + (
+                                (child.position[1] - end_node.position[1]) ** 2) + (
+                                          (child.position[2] - end_node.position[2]) ** 2)
+                        child.f = child.g + child.h
+
+                        for open_node in open_list:
+                            if child == open_node and child.g > open_node.g:
+                                continue
+
+                            # Add the child to the open list
+                        open_list.append(child)
 
 
 
 
-
-
+        self.add_behaviour(GetPath())
 
 
 
@@ -244,6 +415,10 @@ async def main():
 
     airspace_manager = AirSpaceManager("atc_agent@localhost", "password", environment)
     await airspace_manager.start(auto_register=True)
+
+    central_coordination_agent = CentralCoordinationAgent("cc_agent@localhost", "password", environment)
+    await central_coordination_agent.start(auto_register=True)
+
 
     #environment.print_environment()
 
