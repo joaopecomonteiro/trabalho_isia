@@ -124,15 +124,20 @@ class Environment:
 
 
 class AircraftAgent(Agent):
-    def __init__(self, jid, password, environment, idx, start_airport, position, end_airport=None, sent_msg=False):
+    def __init__(self, jid, password, environment, idx, start_airport, position, prev_position=None, end_airport=None, sent_msg=False, path_text=None, got_path=False, path=None):
         super().__init__(jid, password)
         self.environment = environment
         self.idx = idx
         self.start_airport = start_airport
         self.position = position
+        self.prev_position = prev_position
         self.on_land = True
         self.end_airport = end_airport
         self.sent_msg = sent_msg
+        self.path_text = path_text
+        self.got_path = got_path
+        self.path = path
+
 
         self.start_airport.to_full(self)
 
@@ -141,21 +146,43 @@ class AircraftAgent(Agent):
 
         class Fly(CyclicBehaviour):
             async def run(self):
-                if self.agent.on_land:
+                if not self.agent.got_path:
                     if not self.agent.sent_msg:
-                        empty_airports = self.agent.environment.get_empty_airports()
-                        self.agent.end_airport = random.choice(empty_airports)
-                        #print(self.agent.end_airport)
+                        msg = await self.receive()
+                        if msg and str(msg.body)[0] == '[':
+                            print(f"AA - {msg.body} hdwaiuiwdhiuwadhuwdaiuihwdauhiwdauhiwadiuawhdiuawhduhd")
+                            self.agent.path_text = msg.body
 
-                        await self.start_flying(self.agent.start_airport.position, self.agent.end_airport.position)
-                        #self.agent.sent_msg = True
-                        #self.agent.on_land = False
+                            response = Message(to="atc_agent@localhost")
+                            response.body = f"Got it!"
+                            await self.send(response)
+                            self.agent.got_path = True
+
+                        else:
+                            empty_airports = self.agent.environment.get_empty_airports()
+                            self.agent.end_airport = random.choice(empty_airports)
+                            #print(self.agent.end_airport)
+
+                            await self.start_flying(self.agent.start_airport.position, self.agent.end_airport.position)
+                            #self.agent.sent_msg = True
+                            #self.agent.on_land = False
+
+                else:
+                    self.agent.path = ast.literal_eval(self.agent.path_text)
+                    print(self.agent.path)
+
+
+                    #else:
+
+
+                    #    print("AA - iuwaduywaddwadywagu")
+                    #    msg = await self.receive()
+                    #    if msg:
+                    #        print(f"AA - {msg.body}")
 
 
             def update_position(self):
                 self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
-
-
 
 
             async def start_flying(self, start_position, end_position):
@@ -168,11 +195,6 @@ class AircraftAgent(Agent):
                 print(f"AA - Sending this {msg.body}")
                 await self.send(msg)
 
-                response = await self.receive()
-                if response:
-                    print(response.body)
-                    self.agent.sent_msg = True
-                    self.agent.on_land = False
 
         self.add_behaviour(Fly())
 
@@ -187,13 +209,15 @@ class AircraftAgent(Agent):
 
 class AirSpaceManager(Agent):
 
-    def __init__(self, jid, password, environment, aircraft_jid=None, msg_received_from_aircraft=False, msg_to_cc=None, sent_msg_to_cc=False):
+    def __init__(self, jid, password, environment, aircraft_jid=None, msg_received_from_aircraft=False, msg_to_cc=None, waiting_for_path=False, path=None, sending_path_to_aircraft=False):
         super().__init__(jid, password)
         self.environment = environment
         self.aircraft_jid = aircraft_jid
         self.msg_received_from_aircraft = msg_received_from_aircraft
         self.msg_to_cc = msg_to_cc
-        self.sent_msg_to_cc = sent_msg_to_cc
+        self.waiting_for_path = waiting_for_path
+        self.path = path
+        self.sending_path_to_aircraft = sending_path_to_aircraft
 
 
 
@@ -206,39 +230,66 @@ class AirSpaceManager(Agent):
 
         async def run(self):
 
-            if not self.agent.msg_received_from_aircraft:
-                print("ASM - ok")
-                msg = await self.receive(timeout=10)
-                if msg:
-                    code = msg.body[0:4]
-                    if code == "0001":
-                        self.agent.aircraft_jid = str(msg.sender)
-                        print(self.agent.aircraft_jid)
-                        await self.tell_aircraft_msg_received()
-                        self.agent.msg_to_cc = msg.body
-                        #await self.send_msg_to_cc(msg.body)
+            if not self.agent.waiting_for_path:
+                if not self.agent.msg_received_from_aircraft:
+                    print("ASM - ok")
+                    msg = await self.receive(timeout=10)
+                    if msg:
+                        code = msg.body[0:4]
+                        if code == "0001":
+                            self.agent.aircraft_jid = str(msg.sender)
+                            print(self.agent.aircraft_jid)
+                            await self.tell_aircraft_msg_received()
+                            self.agent.msg_to_cc = msg.body
+                            #await self.send_msg_to_cc(msg.body)
 
-            else:
-                if not self.agent.sent_msg_to_cc:
+                else:
+                    #if not self.agent.waiting_for_path:
                     await self.send_msg_to_cc()
+            else:
+                if not self.agent.sending_path_to_aircraft:
+                    msg = await self.receive(timeout=10)
+                    if msg and str(msg.sender) == "cc_agent@localhost":
+                        self.agent.path = msg.body
+                        print(f"ASM - Path {self.agent.path}")
+                        self.agent.sending_path_to_aircraft = True
+                else:
+                    response = await self.receive()
+                    if response and response.body == "Got it!":
+                        print(f"response.body: {response.body}, {str(response.sender)}")
+                        self.agent.waiting_for_path = False
+                        self.agent.msg_received_from_aircraft = False
+                    else:
+                        await self.send_path_to_aircraft()
+
+
+        async def send_path_to_aircraft(self):
+            msg = Message(to=self.agent.aircraft_jid)
+            msg.body = self.agent.path
+            print(f"ASM - Sending this PATH to AA {msg.body}")
+            await self.send(msg)
+
 
 
 
         async def tell_aircraft_msg_received(self):
             msg = Message(to=self.agent.aircraft_jid)
+            print(f"ASM - Sending Message Received to AA wdajdbwaudwauibdwaidbwaiubdwauibduwabduiwabdiuwabdi")
             msg.body = "Message received"
-            self.agent.msg_received_from_aircraft = True
             await self.send(msg)
+            self.agent.msg_received_from_aircraft = True
+
 
         async def send_msg_to_cc(self):
             msg = Message(to="cc_agent@localhost")
             msg.body = self.agent.msg_to_cc
+            print(f"ASM - Sending this to CC {msg.body}")
             await self.send(msg)
 
             response = await self.receive()
             if response and str(response.sender) == "cc_agent@localhost":
                 print(f"response.body: {response.body}, {str(response.sender)}")
-                self.agent.sent_msg_to_cc = True
+                self.agent.waiting_for_path = True
 
 
 
@@ -248,54 +299,62 @@ class AirSpaceManager(Agent):
 
 
 class CentralCoordinationAgent(Agent):
-    def __init__(self, jid, password, environment, path=None, msg_received=False, text=None):
+    def __init__(self, jid, password, environment, path=None, msg_received=False, text=None, sending_path=False):
         super().__init__(jid, password)
         self.environment = environment
         self.path = path
         self.msg_received = msg_received
         self.text = text
+        self.sending_path = sending_path
 
     async def setup(self):
 
         class GetPath(CyclicBehaviour):
 
             async def run(self):
-                if not self.agent.msg_received:
-                    print("CC - ok")
-                    msg = await self.receive(timeout=10)
-                    if msg:
-                        print(f"CC - Got this {msg.body}")
-                        self.agent.text = msg.body
-                        self.agent.msg_received = True
-                        await self.tell_asm_msg_received()
-                else:
-                    #print("ok")
-                    words = re.findall(r'\(.*?\)|\w+', self.agent.text)
-                    code = words[0]
-                    if code == "0001":
-                        #print("okok")
-                        start_position = ast.literal_eval(words[1])
-                        end_position = ast.literal_eval(words[2])
-                        #print(f"start_position: {start_position}")
-                        #print(f"end_position: {end_position}")
+                if not self.agent.sending_path:
+                    if not self.agent.msg_received:
+                        print("CC - ok")
+                        msg = await self.receive(timeout=10)
+                        if msg:
+                            print(f"CC - Got this {msg.body}")
+                            self.agent.text = msg.body
+                            #self.agent.msg_received = True
+                            await self.tell_asm_msg_received()
+                    else:
+                        print("ok")
+                        words = re.findall(r'\(.*?\)|\w+', self.agent.text)
+                        code = words[0]
+                        if code == "0001":
+                            #print("okok")
+                            start_position = ast.literal_eval(words[1])
+                            end_position = ast.literal_eval(words[2])
+                            #print(f"start_position: {start_position}")
+                            #print(f"end_position: {end_position}")
 
-                        self.agent.path = self.astar(start_position, end_position)
-                        #print("dwadwadw")
-                        print(f"path: {self.agent.path}")
-                        await self.send_path_to_asm()
+                            self.agent.path = self.astar(start_position, end_position)
+                            #print("dwadwadw")
+                            print(f"path: {self.agent.path}")
+                            self.agent.sending_path = True
+                else:
+                    await self.send_path_to_asm()
+
 
             async def tell_asm_msg_received(self):
                 msg = Message(to="atc_agent@localhost")
-                msg.body = "Message received -d-a w-d aw--wda -wad -"
+                msg.body = "Message received"
                 self.agent.msg_received = True
                 await self.send(msg)
 
             async def send_path_to_asm(self):
                 msg = Message(to="atc_agent@localhost")
                 msg.body = str(self.agent.path)
-                """
-                ESTAVA AQUI, ACABAR MANDAR PATH PARA ASM
-                """
+                print(f"CC - Sending this {msg.body}")
+                await self.send(msg)
+                self.agent.sending_path = False
+                self.agent.msg_received = False
+
+
 
 
 
