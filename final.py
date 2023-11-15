@@ -6,7 +6,7 @@ import random
 import asyncio
 import spade
 from spade.agent import Agent
-from spade.behaviour import CyclicBehaviour
+from spade.behaviour import CyclicBehaviour, PeriodicBehaviour
 from spade.behaviour import FSMBehaviour
 from spade.behaviour import State
 from spade.behaviour import OneShotBehaviour
@@ -60,23 +60,32 @@ class Node:
         return self.position == other.position
 
 class Airport:
-    def __init__(self, position, idx, empty=True, airplane=None):
+    def __init__(self, position, idx, status='E', airplane=None):
         self.position = position
         self.idx = idx
-        self.empty = empty
+        self.status = status
         self.airplane = airplane
 
     def is_empty(self):
-        return self.empty
+        return self.status == 'E'
+
+    def is_full(self):
+        return self.status == 'F'
+
+    def is_reserved(self):
+        return self.status == 'R'
 
     def to_empty(self):
-        self.empty = True
+        self.status = 'E'
         self.airplane = None
 
-    def to_full(self, airplane=None):
-        self.empty = False
-        #self.airplane = airplane
+    def to_full(self, airplane):
+        self.status = 'F'
+        self.airplane = airplane
 
+    def to_reserved(self, airplane):
+        self.status = 'R'
+        self.airplane = airplane
 
 
 
@@ -114,11 +123,17 @@ class Environment:
 
     def print_environment(self):
         os.system('cls' if os.name == 'nt' else 'clear')
-        for i in range(SIZE):
+
+        matrix_to_print = np.zeros((SIZE, SIZE)).astype(int).astype(str)
+
+        for i in range(len(matrix_to_print)):
             line = ""
-            for j in range(SIZE):
-                line += str(self.matrix[i][j][0]) + " "
+            for j in range(len(matrix_to_print)):
+                line += str(matrix_to_print[i][j]) + " "
             print(line)
+
+        for airport in self.airports:
+            print(f"{airport.idx} - {airport.status} - {airport.airplane}")
 
 
 
@@ -142,11 +157,11 @@ class AircraftAgent(Agent):
         self.asked_for_path = False
 
 
-        self.start_airport.to_full(self)
+        self.start_airport.to_full(self.jid)
 
     async def setup(self):
 
-        class Fly(CyclicBehaviour):
+        class GetPath(CyclicBehaviour):
             async def run(self):
 
                 if self.agent.on_land:
@@ -162,14 +177,17 @@ class AircraftAgent(Agent):
 
 
 
-
             async def ask_asm_for_path(self):
 
                 msg = Message(to="asm_agent@localhost")
                 msg.set_metadata("performative", "query")
                 msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
 
-                print(f"{self.agent.idx} - Sending ASM this {msg.body}\n")
+                with open('chatlog.txt', 'a') as file:
+                    file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
+
+                #print(f"{self.agent.idx} - Sending ASM this {msg.body}\n")
+
                 await self.send(msg)
 
                 self.agent.asked_for_path = True
@@ -178,9 +196,55 @@ class AircraftAgent(Agent):
                 msg_with_path = await self.receive(timeout=15)
                 if msg_with_path:
                     self.agent.path = ast.literal_eval(msg_with_path.body)
-                    print(f"{self.agent.idx} - Got this path: {self.agent.path}\n")
 
-        self.add_behaviour(Fly())
+                    with open('chatlog.txt', 'a') as file:
+                        file.write(f"{self.agent.idx} - Got this path: {self.agent.path}\n\n")
+
+                    #print(f"{self.agent.idx} - Got this path: {self.agent.path}\n")
+
+
+                    self.agent.on_land = False
+                    self.agent.start_airport.to_empty()
+
+
+
+
+
+        class Fly(PeriodicBehaviour):
+            async def run(self):
+
+
+
+                if not self.agent.on_land:
+                    self.agent.position = self.agent.path.pop(0)
+
+                    #with open('chatlog.txt', 'a') as file:
+                    #    file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
+
+                    #print(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
+
+                    self.agent.environment.print_environment()
+
+
+                    if self.agent.position == self.agent.end_airport.position:
+                        self.agent.start_airport = self.agent.end_airport
+                        self.agent.end_airport = None
+                        self.agent.on_land = True
+                        self.agent.asked_for_path = False
+                        self.agent.start_airport.to_full(self.agent.jid)
+
+
+
+
+
+
+
+
+
+
+
+        self.add_behaviour(Fly(2))
+        self.add_behaviour(GetPath())
 
 
 
@@ -208,20 +272,24 @@ class AirSpaceManager(Agent):
                     code = separated_text[0]
                     start_position = separated_text[1]
                     end_position = separated_text[2]
-                    self.fill_airport(end_position)
+                    self.fill_airport(end_position, str(msg.sender))
 
                     if code == "0001":
                         self.agent.AA_wait_queue.append((str(msg.sender), start_position, end_position))
-                        print(f"ASM - Added {str(msg.sender)} to the AA wait queue with the start position: {start_position} and end position: {end_position}\n")
+
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"ASM - Added {str(msg.sender)} to the AA wait queue with the start position: {start_position} and end position: {end_position}\n\n")
+
+                        #print(f"ASM - Added {str(msg.sender)} to the AA wait queue with the start position: {start_position} and end position: {end_position}\n")
 
 
 
 
-            def fill_airport(self, position):
+            def fill_airport(self, position, aircraft):
 
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
-                        airport.to_full()
+                        airport.to_reserved(aircraft)
 
 
         class GetPath(CyclicBehaviour):
@@ -248,7 +316,11 @@ class AirSpaceManager(Agent):
                             msg_with_path.body = msg.body
 
                             await self.send(msg_with_path)
-                            print(f"ASM - Sending this path {msg_with_path.body} to {self.agent.aircraft_data[0]}\n")
+
+                            with open('chatlog.txt', 'a') as file:
+                                file.write(f"ASM - Sending this path {msg_with_path.body} to {self.agent.aircraft_data[0]}\n\n")
+
+                            #print(f"ASM - Sending this path {msg_with_path.body} to {self.agent.aircraft_data[0]}\n")
                             self.agent.waiting_for_path = False
                             self.agent.asked_for_path = False
 
@@ -265,7 +337,10 @@ class AirSpaceManager(Agent):
                 msg.set_metadata("performative", "query")
                 msg.body = f"{start_position} {end_position}"
 
-                print(f"ASM - Asked CC for the path from {start_position} to {end_position}\n")
+                with open('chatlog.txt', 'a') as file:
+                    file.write(f"ASM - Asked CC for the path from {start_position} to {end_position}\n\n")
+
+                #print(f"ASM - Asked CC for the path from {start_position} to {end_position}\n")
                 await self.send(msg)
                 self.agent.asked_for_path = True
 
@@ -315,7 +390,11 @@ class CentralCoordinationAgent(Agent):
                         msg_with_path.body = f"{path}"
                         msg_with_path.set_metadata("performative", "query")
                         await self.send(msg_with_path)
-                        print(f"CC - Sending ASM the path \n")
+
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"CC - Sending ASM the path\n\n")
+
+                        #print(f"CC - Sending ASM the path \n")
 
 
 
@@ -437,6 +516,9 @@ async def main():
     environment = Environment(environment_matrix, [airport_1, airport_2, airport_3, airport_4])
     environment.build_airports()
 
+    with open('chatlog.txt', 'w') as file:
+        file.truncate(0)
+
     central_coordination_agent = CentralCoordinationAgent("cc_agent@localhost", "password", environment)
     await central_coordination_agent.start(auto_register=True)
 
@@ -449,8 +531,8 @@ async def main():
     aircraft_agent_2 = AircraftAgent("aircraft_agent_2@localhost", "password", environment, "A2", airport_2)
     await aircraft_agent_2.start(auto_register=True)
 
-    #aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
-    #await aircraft_agent_3.start(auto_register=True)
+    aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
+    await aircraft_agent_3.start(auto_register=True)
 
 
 
