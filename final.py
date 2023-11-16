@@ -13,7 +13,7 @@ from spade.behaviour import OneShotBehaviour
 from spade.template import Template
 from spade.message import Message
 
-SIZE = 7
+SIZE = 12
 HEIGHT = 4
 
 
@@ -27,29 +27,37 @@ for y in range(SIZE): #Proibir o chão
             environment_matrix[y][x][0] = 'X'
 
 
+for y in range(0, 4): #Criar o aeroporto militar
+    for x in range(7, 8):
+        for z in range(HEIGHT):
+            environment_matrix[y][x][z] = 'X'
+
 for y in range(2, 4): #Criar o aeroporto militar
-    for x in range(0, 2):
+    for x in range(9, 10):
         for z in range(HEIGHT):
             environment_matrix[y][x][z] = 'X'
 
 
-environment_matrix[0][3][HEIGHT-1] = 'X' #Criar a nuvem
-environment_matrix[0][4][HEIGHT-1] = 'X'
+#environment_matrix[0][3][HEIGHT-1] = 'X' #Criar a nuvem
+#environment_matrix[0][4][HEIGHT-1] = 'X'
 
 
-for y in range(2, 5): #Criar montanha
-    for x in range(4, 7):
+for y in range(7, 10): #Criar montanha
+    for x in range(2, 5):
         environment_matrix[y][x][1] = 'X'
-environment_matrix[2][5][2] = 'X'
-environment_matrix[3][4][2] = 'X'
-environment_matrix[3][5][2] = 'X'
-environment_matrix[3][6][2] = 'X'
-environment_matrix[4][5][2] = 'X'
-environment_matrix[3][5][3] = 'X'
+environment_matrix[8][2][2] = 'X'
+environment_matrix[7][3][2] = 'X'
+environment_matrix[8][3][2] = 'X'
+environment_matrix[8][4][2] = 'X'
+environment_matrix[9][3][2] = 'X'
+environment_matrix[8][3][3] = 'X'
+
+
+
 
 class Node:
     def __init__(self, parent=None, position=None):
-        self.parent=parent
+        self.parent = parent
         self.position = position
 
         self.g = 0
@@ -137,6 +145,63 @@ class Environment:
 
 
 
+class CommunicationAgent(Agent):
+    def __init__(self, jid, password, environment):
+        super().__init__(jid, password)
+        self.environment = environment
+        self.warnings = []
+        self.counter = 0
+
+    async def setup(self):
+
+        class PrintEnvironment(PeriodicBehaviour):
+
+            async def run(self):
+
+                os.system('cls' if os.name == 'nt' else 'clear')
+
+                matrix_to_print = np.zeros((SIZE, SIZE)).astype(int).astype(str)
+
+
+
+
+                for aircraft in self.agent.environment.aircraft_positions:
+                    #print(f"{aircraft} - {self.agent.environment.aircraft_positions[aircraft]}")
+                    x = self.agent.environment.aircraft_positions[aircraft][0]
+                    y = self.agent.environment.aircraft_positions[aircraft][1]
+                    matrix_to_print[x][y] = aircraft[1]
+
+                for airport in self.agent.environment.airports:
+                    x = airport.position[0]
+                    y = airport.position[1]
+                    matrix_to_print[x][y] = airport.status
+
+                for i in range(len(matrix_to_print)):
+                    line = ""
+                    for j in range(len(matrix_to_print)):
+                        line += str(matrix_to_print[i][j]) + " "
+                    print(line)
+
+                print()
+
+                for airport in self.agent.environment.airports:
+                    print(f"{airport.idx} - {airport.status} - {airport.airplane}")
+
+                print()
+
+                print(self.agent.counter)
+                self.agent.counter += 1
+
+        self.add_behaviour(PrintEnvironment(2))
+
+
+
+
+
+
+
+
+
 
 
 
@@ -155,6 +220,7 @@ class AircraftAgent(Agent):
 
         self.on_land = True
         self.asked_for_path = False
+        self.wait_in_airport = True
 
 
         self.start_airport.to_full(self.jid)
@@ -164,18 +230,21 @@ class AircraftAgent(Agent):
         class GetPath(CyclicBehaviour):
             async def run(self):
 
-                if self.agent.on_land:
-                    if not self.agent.asked_for_path:
-                        empty_airports = self.agent.environment.get_empty_airports()
+                if not self.agent.wait_in_airport:
+                    if self.agent.on_land:
+                        if not self.agent.asked_for_path:
+                            empty_airports = self.agent.environment.get_empty_airports()
 
-                        if len(empty_airports) > 0:
-                            self.agent.end_airport = random.choice(empty_airports)
-                            await self.ask_asm_for_path()
+                            if len(empty_airports) > 0:
+                                self.agent.end_airport = random.choice(empty_airports)
+                                await self.ask_asm_for_path()
 
-                    else:
-                        await self.receive_path()
-
-
+                        else:
+                            await self.receive_path()
+                else:
+                    #random_number = np.random.randint(2, 5)
+                    await asyncio.sleep(3)
+                    self.agent.wait_in_airport = False
 
             async def ask_asm_for_path(self):
 
@@ -218,12 +287,16 @@ class AircraftAgent(Agent):
                 if not self.agent.on_land:
                     self.agent.position = self.agent.path.pop(0)
 
-                    #with open('chatlog.txt', 'a') as file:
-                    #    file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
+                    self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
+
+                    #print(self.agent.environment.aircraft_positions[self.agent.idx])
+
+                    with open('chatlog.txt', 'a') as file:
+                        file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
 
                     #print(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
 
-                    self.agent.environment.print_environment()
+                    #self.agent.environment.print_environment()
 
 
                     if self.agent.position == self.agent.end_airport.position:
@@ -232,6 +305,7 @@ class AircraftAgent(Agent):
                         self.agent.on_land = True
                         self.agent.asked_for_path = False
                         self.agent.start_airport.to_full(self.agent.jid)
+                        self.agent.wait_in_airport = True
 
 
 
@@ -366,35 +440,36 @@ class CentralCoordinationAgent(Agent):
         class GetPath(CyclicBehaviour):
 
             async def run(self):
-                if not self.agent.got_path:
+                #print()
+                #if not self.agent.got_path:
 
-                    msg = await self.receive(timeout=10)
-                    if msg:
+                msg = await self.receive(timeout=10)
+                if msg:
 
-                        tuple_strings = msg.body.split()
-                        tuples = []
+                    tuple_strings = msg.body.split()
+                    tuples = []
 
-                        for tuple_str in tuple_strings:
-                            # Split the tuple string by comma, remove parentheses, and filter out empty strings
-                            elements = tuple(filter(None, tuple_str.strip('()').split(',')))
-                            # Convert elements to integers and form a tuple
-                            elements = tuple(map(int, elements))
-                            tuples.append(elements)
+                    for tuple_str in tuple_strings:
+                        # Split the tuple string by comma, remove parentheses, and filter out empty strings
+                        elements = tuple(filter(None, tuple_str.strip('()').split(',')))
+                        # Convert elements to integers and form a tuple
+                        elements = tuple(map(int, elements))
+                        tuples.append(elements)
 
-                        # Merge adjacent tuples to form combined tuples
-                        coordinates = [tuples[i] + tuples[i + 1] + tuples[i + 2] for i in range(0, len(tuples), 3)]
+                    # Merge adjacent tuples to form combined tuples
+                    coordinates = [tuples[i] + tuples[i + 1] + tuples[i + 2] for i in range(0, len(tuples), 3)]
 
-                        path = self.astar(coordinates[0], coordinates[1])
+                    path = self.astar(coordinates[0], coordinates[1])
 
-                        msg_with_path = Message(to="asm_agent@localhost")
-                        msg_with_path.body = f"{path}"
-                        msg_with_path.set_metadata("performative", "query")
-                        await self.send(msg_with_path)
+                    msg_with_path = Message(to="asm_agent@localhost")
+                    msg_with_path.body = f"{path}"
+                    msg_with_path.set_metadata("performative", "query")
+                    await self.send(msg_with_path)
 
-                        with open('chatlog.txt', 'a') as file:
-                            file.write(f"CC - Sending ASM the path\n\n")
+                    with open('chatlog.txt', 'a') as file:
+                        file.write(f"CC - Sending ASM the path\n\n")
 
-                        #print(f"CC - Sending ASM the path \n")
+                    #print(f"CC - Sending ASM the path \n")
 
 
 
@@ -410,7 +485,8 @@ class CentralCoordinationAgent(Agent):
                 closed_list = []
 
                 open_list.append(start_node)
-
+                print(f"{start} -> {end}")
+                print(self.agent.environment.matrix[end[0]][end[1]][end[2]])
                 while (len(open_list) > 0):
                     current_node = open_list[0]
                     current_index = 0
@@ -422,12 +498,13 @@ class CentralCoordinationAgent(Agent):
 
                     open_list.pop(current_index)
                     closed_list.append(current_node)
-                    #print(len(open_list))
+                    print(len(open_list))
                     #print(current_node.position)
                     #print("-----------------------")
 
                     # Found the goal
                     if current_node == end_node:
+                        #print("Got path!")
                         path = []
                         current = current_node
                         while current is not None:
@@ -508,16 +585,25 @@ class CentralCoordinationAgent(Agent):
 
 async def main():
 
-    airport_1 = Airport((0, 1, 0), "airport_1")
-    airport_3 = Airport((0, 6, 0), "airport_3")
-    airport_2 = Airport((6, 0, 0), "airport_2")
-    airport_4 = Airport((6, 5, 0), "airport_4")
+    airport_1 = Airport((0, 0, 0), "airport_1")
+    airport_2 = Airport((0, 11, 0), "airport_2")
+    airport_3 = Airport((4, 7, 0), "airport_3")
+    airport_4 = Airport((11, 0, 0), "airport_4")
+    airport_5 = Airport((11, 6, 0), "airport_5")
 
-    environment = Environment(environment_matrix, [airport_1, airport_2, airport_3, airport_4])
+
+    airport_list = [airport_1, airport_2, airport_3, airport_4, airport_5]
+
+
+
+    environment = Environment(environment_matrix, airport_list)
     environment.build_airports()
 
     with open('chatlog.txt', 'w') as file:
         file.truncate(0)
+
+    communication_agent = CommunicationAgent("com_agent@localhost", "password", environment)
+    await communication_agent.start(auto_register=True)
 
     central_coordination_agent = CentralCoordinationAgent("cc_agent@localhost", "password", environment)
     await central_coordination_agent.start(auto_register=True)
@@ -525,16 +611,30 @@ async def main():
     airspace_manager = AirSpaceManager("asm_agent@localhost", "password", environment)
     await airspace_manager.start(auto_register=True)
 
+
+    for airport in airport_list[0:4]:
+        airport.to_full(f"temp")
+
+
+
     aircraft_agent_1 = AircraftAgent("aircraft_agent_1@localhost", "password", environment, "A1", airport_1)
     await aircraft_agent_1.start(auto_register=True)
+
+    #await asyncio.sleep(1)
 
     aircraft_agent_2 = AircraftAgent("aircraft_agent_2@localhost", "password", environment, "A2", airport_2)
     await aircraft_agent_2.start(auto_register=True)
 
+    #await asyncio.sleep(1)
+
     aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
     await aircraft_agent_3.start(auto_register=True)
 
+    aircraft_agent_4 = AircraftAgent("aircraft_agent_4@localhost", "password", environment, "A4", airport_4)
+    await aircraft_agent_4.start(auto_register=True)
 
+    #aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
+    #await aircraft_agent_5.start(auto_register=True)
 
 
 if __name__ == "__main__":
