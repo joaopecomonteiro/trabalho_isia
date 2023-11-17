@@ -181,10 +181,26 @@ class CommunicationAgent(Agent):
 
                 print()
 
-                print(self.agent.counter)
-                self.agent.counter += 1
+                for i, warning in enumerate(self.agent.warnings):
+                    print(warning[0])
+                    if warning[1] > 7:
+                        self.agent.warnings.pop(i)
+                    warning[1] += 1
 
-        self.add_behaviour(PrintEnvironment(2))
+                #print(self.agent.counter)
+                #self.agent.counter += 1
+
+        class WaitingForWarnings(CyclicBehaviour):
+
+            async def run(self):
+
+                msg = await self.receive()
+                if msg:
+                    self.agent.warnings.append([msg.body, 0])
+
+
+        self.add_behaviour(PrintEnvironment(1))
+        self.add_behaviour(WaitingForWarnings())
 
 
 
@@ -207,12 +223,16 @@ class AircraftAgent(Agent):
         self.idx = idx
         self.start_airport = start_airport
         self.end_airport = None
+        #self.end_position = None
         self.position = start_airport.position
         self.path = None
 
         self.on_land = True
         self.asked_for_path = False
         self.wait_in_airport = True
+        self.got_emergency = False
+        self.already_got_emergency = False
+        self.asked_for_emergency_path = False
 
 
         self.start_airport.to_full(self.jid)
@@ -221,55 +241,121 @@ class AircraftAgent(Agent):
 
         class GetPath(CyclicBehaviour):
             async def run(self):
+                if not self.agent.got_emergency:
+                    if not self.agent.wait_in_airport:
+                        if self.agent.on_land:
+                            if not self.agent.asked_for_path:
+                                empty_airports = self.agent.environment.get_empty_airports()
 
-                if not self.agent.wait_in_airport:
-                    if self.agent.on_land:
-                        if not self.agent.asked_for_path:
-                            empty_airports = self.agent.environment.get_empty_airports()
+                                if len(empty_airports) > 0:
+                                    end_airport = random.choice(empty_airports)
+                                    self.agent.end_airport = end_airport
+                                    self.agent.end_position = end_airport.position
+                                    await self.ask_asm_for_path()
 
-                            if len(empty_airports) > 0:
-                                self.agent.end_airport = random.choice(empty_airports)
-                                await self.ask_asm_for_path()
-
-                        else:
-                            await self.receive_path()
+                            else:
+                                await self.receive_path()
+                    else:
+                        #random_number = np.random.randint(2, 5)
+                        await asyncio.sleep(3)
+                        self.agent.wait_in_airport = False
                 else:
-                    #random_number = np.random.randint(2, 5)
-                    await asyncio.sleep(3)
-                    self.agent.wait_in_airport = False
+                    if not self.agent.asked_for_emergency_path:
+                        #print("dasdw")
+                        await self.ask_asm_for_path()
+
+
+                    else:
+                        await self.receive_path()
+
+
+            def get_end_airport(self, airport_name):
+                for airport in self.agent.environment.airports:
+                    if airport.idx == airport_name:
+                        self.agent.end_airport = airport
+
 
             async def ask_asm_for_path(self):
-
-                msg = Message(to="asm_agent@localhost")
-                msg.set_metadata("performative", "query")
-                msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
-
-                with open('chatlog.txt', 'a') as file:
-                    file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
-
-                #print(f"{self.agent.idx} - Sending ASM this {msg.body}\n")
-
-                await self.send(msg)
-
-                self.agent.asked_for_path = True
-
-            async def receive_path(self):
-                msg_with_path = await self.receive(timeout=15)
-                if msg_with_path:
-                    self.agent.path = ast.literal_eval(msg_with_path.body)
+                if not self.agent.got_emergency:
+                    msg = Message(to="asm_agent@localhost")
+                    msg.set_metadata("performative", "query")
+                    msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
 
                     with open('chatlog.txt', 'a') as file:
-                        file.write(f"{self.agent.idx} - Got this path: {self.agent.path}\n\n")
+                        file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
 
-                    #print(f"{self.agent.idx} - Got this path: {self.agent.path}\n")
+                    #print(f"{self.agent.idx} - Sending ASM this {msg.body}\n")
 
+                    await self.send(msg)
 
-                    self.agent.on_land = False
-                    self.agent.start_airport.to_empty()
-
-
+                    self.agent.asked_for_path = True
 
 
+
+
+                else:
+                    msg = Message(to="asm_agent@localhost")
+                    msg.set_metadata("performative", "query")
+                    msg.body = f"0002 {self.agent.position}"
+                    #print(f"AA - Asking ASM for help, I am here {self.agent.position}")
+
+                    with open('chatlog.txt', 'a') as file:
+                        file.write(f"{self.agent.idx} - Got a problem, asking ASM for help\n\n")
+
+                    await self.send(msg)
+
+                    new_end_airport_msg = await self.receive(timeout=10)
+                    if new_end_airport_msg:
+                        self.get_end_airport(new_end_airport_msg.body)
+                        #print(f"AA - My new end airport is {self.agent.end_airport.idx}")
+
+                    self.agent.asked_for_emergency_path = True
+
+
+            async def receive_path(self):
+                if not self.agent.got_emergency:
+                    msg_with_path = await self.receive(timeout=10)
+                    if msg_with_path:
+                        self.agent.path = ast.literal_eval(msg_with_path.body)
+
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"{self.agent.idx} - Got this path: {self.agent.path} from {str(msg_with_path.sender)}\n\n")
+
+                        #print(f"{self.agent.idx} - Got this path: {self.agent.path}\n")
+
+
+                        self.agent.on_land = False
+                        self.agent.start_airport.to_empty()
+
+                else:
+                    msg_with_path_emergency = await self.receive(timeout=10)
+                    if msg_with_path_emergency:
+                        #print(f"AA - Got this emergency path {msg_with_path_emergency.body} from {str(msg_with_path_emergency.sender)}")
+
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"{self.agent.idx} - Got this emergency path {msg_with_path_emergency.body}\n\n")
+
+                        #print(f"AWADAWDWADWA - {msg_with_path.body}")
+                        self.agent.path = ast.literal_eval(msg_with_path_emergency.body[5:])
+                        #print(f"AA - This is my path now {self.agent.path}")
+                        self.agent.got_emergency = False
+                        self.agent.already_got_emergency = True
+
+
+        class WaitForEmergency(CyclicBehaviour):
+
+            async def run(self):
+                msg = await self.receive()
+                if msg and msg.body == "0003":
+                    #self.agent.end_airport.to_empty()
+
+                    self.agent.end_airport = None
+                    self.agent.on_land = True
+                    self.agent.asked_for_path = False
+                    self.agent.wait_in_airport = True
+                    self.agent.already_got_emergency = False
+                    self.agent.got_emergency = False
+                    self.agent.asked_for_emergency_path = False
 
         class Fly(PeriodicBehaviour):
             async def run(self):
@@ -277,35 +363,68 @@ class AircraftAgent(Agent):
 
 
                 if not self.agent.on_land:
-
-                    random_number = np.random.randint(1, 2)
-                    if random_number == 2:
-
-                        self.agent.environment.get_closest_not_full_airport(self.agent.position)
-
-                    self.agent.position = self.agent.path.pop(0)
+                    #print(self.agent.got_emergency)
+                    if not self.agent.got_emergency:
+                        random_number = np.random.randint(1, 2)
+                        if random_number == 1 and self.agent.already_got_emergency==False and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport:
+                            #print("Got Emergency")
 
 
+                            self.agent.got_emergency = True
+                            self.agent.asked_for_path = False
+                            self.agent.end_airport.to_empty()
+                        #    await self.ask_asm_for_help()
+                        #    await self.get_emergency_path()
+                        else:
 
-                    self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
-
-                    #print(self.agent.environment.aircraft_positions[self.agent.idx])
-
-                    #with open('chatlog.txt', 'a') as file:
-                    #    file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
-
-                    #print(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
-
-                    #self.agent.environment.print_environment()
+                            #print(f"AA - My position {self.agent.position}")
+                            #print(f"AA - End position {self.agent.end_airport.position}")
+                            #print(f"AA - My path {self.agent.path}")
 
 
-                    if self.agent.position == self.agent.end_airport.position:
-                        self.agent.start_airport = self.agent.end_airport
-                        self.agent.end_airport = None
-                        self.agent.on_land = True
-                        self.agent.asked_for_path = False
-                        self.agent.start_airport.to_full(self.agent.jid)
-                        self.agent.wait_in_airport = True
+                            self.agent.position = self.agent.path.pop(0)
+
+
+                            self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
+
+                            #print(self.agent.environment.aircraft_positions[self.agent.idx])
+
+                            #with open('chatlog.txt', 'a') as file:
+                            #    file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
+
+                            #print(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
+
+                            #self.agent.environment.print_environment()
+
+
+                            if self.agent.position == self.agent.end_airport.position:
+                                with open('chatlog.txt', 'a') as file:
+                                    file.write(f"I have arrived\n\n")
+
+                                self.agent.start_airport = self.agent.end_airport
+                                self.agent.end_airport = None
+                                self.agent.on_land = True
+                                self.agent.asked_for_path = False
+                                self.agent.start_airport.to_full(self.agent.jid)
+                                self.agent.wait_in_airport = True
+                                self.agent.already_got_emergency = False
+                                self.agent.got_emergency = False
+                                self.agent.asked_for_emergency_path = False
+
+
+
+
+
+
+            async def get_emergency_path(self):
+                await asyncio.sleep(1)
+
+                new_path = await self.receive()
+                if new_path and new_path.body[0:4] == "0002":
+                    #print(f"AA - Emergency - Got this path {new_path.body[4:]}")
+
+                    self.agent.path = ast.literal_eval(new_path.body[4:])
+                    self.agent.got_emergency = True
 
 
             async def ask_asm_for_help(self):
@@ -313,6 +432,8 @@ class AircraftAgent(Agent):
                 msg = Message(to="asm_agent@localhost")
                 msg.set_metadata("performative", "query")
                 msg.body = f"0002 {self.agent.position}"
+
+                #print("AA - Asking ASM for help")
 
                 with open('chatlog.txt', 'a') as file:
                     file.write(f"{self.agent.idx} - Got a problem, asking ASM for help\n\n")
@@ -346,14 +467,16 @@ class AirSpaceManager(Agent):
 
                 msg = await self.receive(timeout=10)
                 if msg and str(msg.sender)[0:8] == "aircraft":
-
+                    #print(f"ASM - {msg.body}")
                     separated_text = re.findall(r'\(.*?\)|\w+', msg.body)
                     code = separated_text[0]
-                    start_position = separated_text[1]
-                    end_position = separated_text[2]
-                    self.fill_airport(end_position, str(msg.sender))
+
 
                     if code == "0001":
+                        start_position = separated_text[1]
+                        end_position = separated_text[2]
+                        self.reserve_airport(end_position, str(msg.sender))
+
                         self.agent.AA_wait_queue.append((str(msg.sender), start_position, end_position))
 
                         with open('chatlog.txt', 'a') as file:
@@ -363,17 +486,58 @@ class AirSpaceManager(Agent):
 
                     if code == "0002":
 
-                        closest_airport = self.agent.environment.get_closest_not_full_airport()
+                        warning_msg = Message(to="com_agent@localhost")
+                        warning_msg.body = f"{str(msg.sender)} Got an emergency!"
+                        await self.send(warning_msg)
+
+
+                        start_position = ast.literal_eval(separated_text[1])
+                        #end_position = ast.literal_eval(separated_text[2])
+                        closest_airport = self.agent.environment.get_closest_not_full_airport(start_position)
+                        print(f"{closest_airport.idx} - {closest_airport.status}")
+
 
                         if closest_airport.is_reserved():
-                            aircraft_to_change = closest_airport.airplane
+                            aircraft_to_redirect = closest_airport.airplane
+                            redirect_msg = Message(to=aircraft_to_redirect)
+                            redirect_msg.body = "0003"
+                            await self.send(redirect_msg)
+
+                            redirect_warning_msg = Message(to="com_agent@localhost")
+                            redirect_warning_msg.body = f"Redirecting {aircraft_to_redirect}"
+
                         else:
                             aircraft_to_change = None
 
-                        await self.emergency_ask_cc_for_path(self.agent.position, closest_airport.position)
+                        await self.tell_aa_new_end_airport(str(msg.sender), closest_airport.idx)
+                        self.fill_airport(str(closest_airport.position), str(msg.sender))
+
+
+                        await self.emergency_ask_cc_for_path(start_position, closest_airport.position)
+
+                        response = await self.receive(timeout=10)
+
+                        if response and str(response.sender) == "cc_agent@localhost" and response.body[0:4]=="0002":
+                            msg_with_path = Message(to=str(msg.sender))
+                            msg_with_path.set_metadata("performative", "query")
+                            msg_with_path.body = f"0002 {response.body[5:]}"
+
+                            with open('chatlog.txt', 'a') as file:
+                                file.write(f"ASM - Sending AA this emergency path {msg_with_path.body}\n\n")
+
+                            #print(f"ASM - Sending AA this emergency path {msg_with_path.body}")
 
 
 
+                            await self.send(msg_with_path)
+
+            async def tell_aa_new_end_airport(self, aircraft, airport):
+
+                msg = Message(to=aircraft)
+                msg.set_metadata("performative", "query")
+                msg.body = airport
+
+                await self.send(msg)
 
             async def emergency_ask_cc_for_path(self, start_position, end_position):
 
@@ -382,19 +546,24 @@ class AirSpaceManager(Agent):
                 msg.body = f"0002 {start_position} {end_position}"
 
                 with open('chatlog.txt', 'a') as file:
-                    file.write(f"ASM - Asked CC for the path from {start_position} to {end_position}\n\n")
+                    file.write(f"ASM - Emergency - Asked CC for the path from {start_position} to {end_position}\n\n")
 
-                #print(f"ASM - Asked CC for the path from {start_position} to {end_position}\n")
+                #print(f"ASM - Emergency - Asked CC for the path from {start_position} to {end_position}\n")
                 await self.send(msg)
 
 
 
 
 
-
-
-
             def fill_airport(self, position, aircraft):
+
+                for airport in self.agent.environment.airports:
+                    if airport.position == ast.literal_eval(position):
+                        airport.to_full(aircraft)
+
+
+
+            def reserve_airport(self, position, aircraft):
 
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
@@ -417,12 +586,12 @@ class AirSpaceManager(Agent):
                     else:
 
                         msg = await self.receive()
-                        if msg and str(msg.sender) == "cc_agent@localhost":
+                        if msg and str(msg.sender) == "cc_agent@localhost" and msg.body[0:4]=="0001":
                             #print(f"ASM - Got this path {msg.body}")
 
                             msg_with_path = Message(to=self.agent.aircraft_data[0])
                             msg_with_path.set_metadata("performative", "query")
-                            msg_with_path.body = msg.body
+                            msg_with_path.body = msg.body[5:]
 
                             await self.send(msg_with_path)
 
@@ -480,7 +649,7 @@ class CentralCoordinationAgent(Agent):
 
                 msg = await self.receive(timeout=10)
                 if msg:
-                    print(msg.body)
+                    #print(f"CC - {msg.body}")
                     separated_text = re.findall(r'\(.*?\)|\w+', msg.body)
                     code = separated_text[0]
                     start_position = ast.literal_eval(separated_text[1])
@@ -502,17 +671,29 @@ class CentralCoordinationAgent(Agent):
                     coordinates = [tuples[i] + tuples[i + 1] + tuples[i + 2] for i in range(0, len(tuples), 3)]
                     """
 
-                    #if code == "0001":
-                    path = self.astar(start_position, end_position)
+                    if code == "0001":
+                        path = self.astar(start_position, end_position)
+                        #print(f"CC - {path}")
 
-                    msg_with_path = Message(to="asm_agent@localhost")
-                    msg_with_path.body = f"{path}"
-                    msg_with_path.set_metadata("performative", "query")
-                    await self.send(msg_with_path)
+                        msg_with_path = Message(to="asm_agent@localhost")
+                        msg_with_path.body = f"0001 {path}"
+                        msg_with_path.set_metadata("performative", "query")
+                        await self.send(msg_with_path)
 
-                    with open('chatlog.txt', 'a') as file:
-                        file.write(f"CC - Sending ASM the path\n\n")
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"CC - Sending ASM this path {msg_with_path.body}\n\n")
 
+                    elif code == "0002":
+                        path = self.astar(start_position, end_position)
+                        #print(f"CC - Emergency - {path}")
+
+                        msg_with_path = Message(to="asm_agent@localhost")
+                        msg_with_path.body = f"0002 {path}"
+                        msg_with_path.set_metadata("performative", "query")
+                        await self.send(msg_with_path)
+
+                        with open('chatlog.txt', 'a') as file:
+                            file.write(f"CC - Emergency - Sending ASM this path {msg_with_path.body}\n\n")
 
 
                     #print(f"CC - Sending ASM the path \n")
@@ -640,7 +821,7 @@ async def main():
     airport_7 = Airport((14, 14, 0), "airport_7")
 
 
-    airport_list = [airport_1, airport_2, airport_3, airport_4, airport_5, airport_6, airport_7]
+    airport_list = [airport_1, airport_2, airport_3, airport_4]
 
 
 
@@ -666,12 +847,12 @@ async def main():
     aircraft_agent_1 = AircraftAgent("aircraft_agent_1@localhost", "password", environment, "A1", airport_1)
     await aircraft_agent_1.start(auto_register=True)
 
-    #aircraft_agent_2 = AircraftAgent("aircraft_agent_2@localhost", "password", environment, "A2", airport_2)
-    #await aircraft_agent_2.start(auto_register=True)
+    aircraft_agent_2 = AircraftAgent("aircraft_agent_2@localhost", "password", environment, "A2", airport_2)
+    await aircraft_agent_2.start(auto_register=True)
 
 
-    #aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
-    #await aircraft_agent_3.start(auto_register=True)
+    aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
+    await aircraft_agent_3.start(auto_register=True)
 
     #aircraft_agent_4 = AircraftAgent("aircraft_agent_4@localhost", "password", environment, "A4", airport_4)
     #await aircraft_agent_4.start(auto_register=True)
