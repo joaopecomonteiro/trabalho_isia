@@ -5,13 +5,10 @@ import ast
 import random
 import math
 import asyncio
+
 import spade
 from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour, PeriodicBehaviour
-from spade.behaviour import FSMBehaviour
-from spade.behaviour import State
-from spade.behaviour import OneShotBehaviour
-from spade.template import Template
 from spade.message import Message
 
 SIZE = 15
@@ -124,10 +121,15 @@ class Environment:
         min_distance = math.inf
 
         for airport in self.airports:
-            distance = math.sqrt(sum((p2 - p1)**2 for p1, p2 in zip(aircraft_position, airport.position)))
-            if distance < min_distance:
-                min_distance = distance
-                closest = airport
+            if airport.status != 'F':
+                distance = math.sqrt(sum((p2 - p1)**2 for p1, p2 in zip(aircraft_position, airport.position)))
+                if distance < min_distance:
+                    min_distance = distance
+                    closest = airport
+
+        #with open('teste.txt', 'a') as file:
+        #    file.write(f"{closest.idx} - {closest.status}\n\n")
+
         return(closest)
 
 
@@ -139,7 +141,7 @@ class CommunicationAgent(Agent):
         super().__init__(jid, password)
         self.environment = environment
         self.warnings = []
-        self.counter = 0
+        self.same_coordinates_counter = 0
 
     async def setup(self):
 
@@ -180,6 +182,16 @@ class CommunicationAgent(Agent):
                     print(f"{airport.idx} - {airport.status} - {airport.airplane}")
 
                 print()
+
+                seen_values = set()
+                for value in self.agent.environment.aircraft_positions.values():
+                    if value in seen_values:
+                        self.agent.same_coordinates_counter += 1 # Found a repeated value
+                    seen_values.add(value)
+                print(f"Times aircrafts passed in the same point: {self.agent.same_coordinates_counter}\n")
+
+                with open('teste.txt', 'a') as file:
+                   file.write(f"{self.agent.environment.aircraft_positions}\n\n")
 
                 for i, warning in enumerate(self.agent.warnings):
                     print(warning[0])
@@ -256,8 +268,8 @@ class AircraftAgent(Agent):
                             else:
                                 await self.receive_path()
                     else:
-                        #random_number = np.random.randint(2, 5)
-                        await asyncio.sleep(3)
+                        random_number = np.random.randint(2, 5)
+                        await asyncio.sleep(random_number)
                         self.agent.wait_in_airport = False
                 else:
                     if not self.agent.asked_for_emergency_path:
@@ -315,7 +327,7 @@ class AircraftAgent(Agent):
             async def receive_path(self):
                 if not self.agent.got_emergency:
                     msg_with_path = await self.receive(timeout=10)
-                    if msg_with_path:
+                    if msg_with_path and msg_with_path.body != "0003":
                         self.agent.path = ast.literal_eval(msg_with_path.body)
 
                         with open('chatlog.txt', 'a') as file:
@@ -347,6 +359,9 @@ class AircraftAgent(Agent):
             async def run(self):
                 msg = await self.receive()
                 if msg and msg.body == "0003":
+                    with open('teste.txt', 'a') as file:
+                        file.write(f"{self.agent.idx} - Got redirected\n\n")
+
                     #self.agent.end_airport.to_empty()
 
                     self.agent.end_airport = None
@@ -365,8 +380,8 @@ class AircraftAgent(Agent):
                 if not self.agent.on_land:
                     #print(self.agent.got_emergency)
                     if not self.agent.got_emergency:
-                        random_number = np.random.randint(1, 2)
-                        if random_number == 1 and self.agent.already_got_emergency==False and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport:
+                        random_number = np.random.randint(1, 20)
+                        if random_number == 3 and self.agent.already_got_emergency==False and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport:
                             #print("Got Emergency")
 
 
@@ -399,7 +414,7 @@ class AircraftAgent(Agent):
 
                             if self.agent.position == self.agent.end_airport.position:
                                 with open('chatlog.txt', 'a') as file:
-                                    file.write(f"I have arrived\n\n")
+                                    file.write(f"{self.agent.idx} - I have arrived\n\n")
 
                                 self.agent.start_airport = self.agent.end_airport
                                 self.agent.end_airport = None
@@ -443,6 +458,7 @@ class AircraftAgent(Agent):
 
 
 
+        self.add_behaviour(WaitForEmergency())
         self.add_behaviour(Fly(2))
         self.add_behaviour(GetPath())
 
@@ -505,9 +521,10 @@ class AirSpaceManager(Agent):
 
                             redirect_warning_msg = Message(to="com_agent@localhost")
                             redirect_warning_msg.body = f"Redirecting {aircraft_to_redirect}"
+                            await self.send(redirect_warning_msg)
 
-                        else:
-                            aircraft_to_change = None
+                            with open('teste.txt', 'a') as file:
+                                file.write(f"ASM - Redirecting {aircraft_to_redirect}\n\n")
 
                         await self.tell_aa_new_end_airport(str(msg.sender), closest_airport.idx)
                         self.fill_airport(str(closest_airport.position), str(msg.sender))
@@ -821,7 +838,7 @@ async def main():
     airport_7 = Airport((14, 14, 0), "airport_7")
 
 
-    airport_list = [airport_1, airport_2, airport_3, airport_4]
+    airport_list = [airport_1, airport_2, airport_3, airport_4, airport_5, airport_6, airport_7]
 
 
 
@@ -854,11 +871,11 @@ async def main():
     aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
     await aircraft_agent_3.start(auto_register=True)
 
-    #aircraft_agent_4 = AircraftAgent("aircraft_agent_4@localhost", "password", environment, "A4", airport_4)
-    #await aircraft_agent_4.start(auto_register=True)
+    aircraft_agent_4 = AircraftAgent("aircraft_agent_4@localhost", "password", environment, "A4", airport_4)
+    await aircraft_agent_4.start(auto_register=True)
 
-    #aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
-    #await aircraft_agent_5.start(auto_register=True)
+    aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
+    await aircraft_agent_5.start(auto_register=True)
 
     #aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
     #await aircraft_agent_6.start(auto_register=True)
