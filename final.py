@@ -14,13 +14,12 @@ from spade.message import Message
 SIZE = 15
 HEIGHT = 4
 
-
+#Matrix do ambiente
 environment_matrix = np.zeros((SIZE, SIZE, HEIGHT)).astype(int).astype(str)
 
 
 for y in range(SIZE): #Proibir o chão
     for x in range(SIZE):
-        #print(environment_matrix[y][x][0])
         if environment_matrix[y][x][0] == '0':
             environment_matrix[y][x][0] = 'X'
 
@@ -30,9 +29,6 @@ for y in range(2, 4):  # Criar o aeroporto militar
         for z in range(HEIGHT):
             environment_matrix[y][x][z] = 'X'
 
-
-#environment_matrix[0][3][HEIGHT-1] = 'X' #Criar a nuvem
-#environment_matrix[0][4][HEIGHT-1] = 'X'
 
 
 for y in range(10, 13):  # Criar montanha
@@ -49,6 +45,14 @@ environment_matrix[11][3][3] = 'X'
 
 
 class Node:
+    """
+    Classe dos nódulos para o algoritmo astar
+
+    Argumentos:
+    parent - nó pai
+    position - coordenadas na matriz
+    g, h, f - valores do astar
+    """
     def __init__(self, parent=None, position=None):
         self.parent = parent
         self.position = position
@@ -61,6 +65,15 @@ class Node:
         return self.position == other.position
 
 class Airport:
+    """
+    Classe para os aeroportos
+
+    Argumentos:
+    position - coordenadas do aeroporto
+    idx - nome do aeroporto
+    status - estado do aeroport (empty->'E', reserved->'R', full->'F')
+    airplane - avião associado ao aeroporto num determinado momento
+    """
     def __init__(self, position, idx):
         self.position = position
         self.idx = idx
@@ -92,6 +105,15 @@ class Airport:
 
 
 class Environment:
+    """
+    Classe que representa o ambiente
+
+    Argumentos:
+    matrix - matriz do ambiente
+    aiports - aeroportos
+    aircraft_positions - posições dos aviões num determinado momento
+    """
+
     def __init__(self, matrix, airports):
         self.matrix = matrix
         self.airports = airports
@@ -99,14 +121,17 @@ class Environment:
 
 
     def build_airports(self):
+        """
+        Função para criar os aeroportos na matriz
+        """
         for airport in self.airports:
-            if airport.is_empty():
-                environment_matrix[airport.position[0]][airport.position[1]][airport.position[2]] = 'E'
-            else:
-                environment_matrix[airport.position[0]][airport.position[1]][airport.position[2]] = 'F'
+            environment_matrix[airport.position[0]][airport.position[1]][airport.position[2]] = airport.status
 
 
     def get_empty_airports(self):
+        """
+        Função para obter os aeroportos vazios
+        """
         empty_airports = []
         for airport in self.airports:
             if airport.is_empty():
@@ -114,9 +139,15 @@ class Environment:
         return empty_airports
 
     def get_airports(self):
+        """
+        Função para obter todos os aeroportos
+        """
         return self.airports
 
     def get_closest_not_full_airport(self, aircraft_position):
+        """
+        Função para obter o aeroporto não cheio mais próximo do avião num determinado momento
+        """
         closest = None
         min_distance = math.inf
 
@@ -127,9 +158,6 @@ class Environment:
                     min_distance = distance
                     closest = airport
 
-        #with open('teste.txt', 'a') as file:
-        #    file.write(f"{closest.idx} - {closest.status}\n\n")
-
         return(closest)
 
 
@@ -137,6 +165,22 @@ class Environment:
 
 
 class CommunicationAgent(Agent):
+    """
+    Agente encarregue de imprimir a matriz, os aeroportos (incluindo o seu estado e o avião associado ao aeroporto)
+     e alguns avisos que recebe do Air Space Manager(ASM),
+    estes avisos podem ser uma emergência de um avião ou o redirecionamento de um avião
+
+    A matriz imprimida é uma matriz de dua dimensões que representa o espaço aéreo (é ignorada a altura)
+    Nesta matriz está representada também os aeroportos, o aeroporto militar e o pico da montanha
+
+    Argumentos:
+    jid - jid do agente
+    password - password do agente
+    environment - ambiente
+    warnings - avisos que recebe do ASM, cada aviso fica no ecrã 8 segundos
+    same_coordinates_counter - número de vezes que dois aviões
+                               passaram no mesmo sitio ao mesmo tempo
+    """
     def __init__(self, jid, password, environment):
         super().__init__(jid, password)
         self.environment = environment
@@ -146,31 +190,32 @@ class CommunicationAgent(Agent):
     async def setup(self):
 
         class PrintEnvironment(PeriodicBehaviour):
-
+            """
+            Comportamento para imprimir o ambiente, imprime a matriz, os avisos e o contador
+            """
             async def run(self):
 
                 os.system('cls' if os.name == 'nt' else 'clear')
 
                 matrix_to_print = np.zeros((SIZE, SIZE)).astype(int).astype(str)
 
-                for y in range(2, 4):  # Criar o aeroporto militar
+                for y in range(2, 4):  # Criar o aeroporto militar na matriz para imprimir
                     for x in range(10, 14):
                             matrix_to_print[y][x] = 'A'
 
-                matrix_to_print[11][3] = 'P'
+                matrix_to_print[11][3] = 'P' #Criar o pico da montanha
 
-                for aircraft in self.agent.environment.aircraft_positions:
-                    #print(f"{aircraft} - {self.agent.environment.aircraft_positions[aircraft]}")
+                for aircraft in self.agent.environment.aircraft_positions: #Criar os aviões
                     x = self.agent.environment.aircraft_positions[aircraft][0]
                     y = self.agent.environment.aircraft_positions[aircraft][1]
                     matrix_to_print[x][y] = aircraft[1]
 
-                for airport in self.agent.environment.airports:
+                for airport in self.agent.environment.airports: #Criar os aeroportos
                     x = airport.position[0]
                     y = airport.position[1]
                     matrix_to_print[x][y] = airport.status
 
-                for i in range(len(matrix_to_print)):
+                for i in range(len(matrix_to_print)): #Imprimir a matriz
                     line = ""
                     for j in range(len(matrix_to_print)):
                         line += str(matrix_to_print[i][j]) + " "
@@ -178,32 +223,31 @@ class CommunicationAgent(Agent):
 
                 print()
 
-                for airport in self.agent.environment.airports:
+                for airport in self.agent.environment.airports: #Imprimir os aeroportos
                     print(f"{airport.idx} - {airport.status} - {airport.airplane}")
 
                 print()
 
+                #Contar e imprimir o número de vezes que aviões já passaram na mesma posição
                 seen_values = set()
                 for value in self.agent.environment.aircraft_positions.values():
                     if value in seen_values:
-                        self.agent.same_coordinates_counter += 1 # Found a repeated value
+                        self.agent.same_coordinates_counter += 1
                     seen_values.add(value)
                 print(f"Times aircrafts passed in the same point: {self.agent.same_coordinates_counter}\n")
 
-                with open('teste.txt', 'a') as file:
-                   file.write(f"{self.agent.environment.aircraft_positions}\n\n")
-
+                #Imprimir os avisos
                 for i, warning in enumerate(self.agent.warnings):
                     print(warning[0])
                     if warning[1] > 7:
                         self.agent.warnings.pop(i)
                     warning[1] += 1
 
-                #print(self.agent.counter)
-                #self.agent.counter += 1
 
         class WaitingForWarnings(CyclicBehaviour):
-
+            """
+            Comportamento para receber as mensagens com os avisos
+            """
             async def run(self):
 
                 msg = await self.receive()
@@ -216,29 +260,32 @@ class CommunicationAgent(Agent):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 class AircraftAgent(Agent):
+    """
+    Agente que representa os aviões
+
+    Argumentos:
+    jid - jid do agente
+    password - password do agente
+    environment - ambiente
+    idx - id do agente, para ser mais facilmente reconhecido
+    start_airport - aeroporto onde começou o voo
+    end_airport - aeroporto onde vai acabar o voo
+    position - posição num determinado momento
+    path - caminho a percorrer no voo
+
+    Para além dos argumentos tem também alguma flags que facilitam o funcinamento do agente
+    """
     def __init__(self, jid, password, environment, idx, start_airport):
         super().__init__(jid, password)
         self.environment = environment
         self.idx = idx
         self.start_airport = start_airport
         self.end_airport = None
-        #self.end_position = None
         self.position = start_airport.position
         self.path = None
 
+        #Flags
         self.on_land = True
         self.asked_for_path = False
         self.wait_in_airport = True
@@ -246,19 +293,30 @@ class AircraftAgent(Agent):
         self.already_got_emergency = False
         self.asked_for_emergency_path = False
 
-
+        #Preencher o aeroporto inicial
         self.start_airport.to_full(self.jid)
 
     async def setup(self):
 
         class GetPath(CyclicBehaviour):
+            """
+            Comportamento para pedir e receber o caminho do voo
+            Todas comunicações são feitas com o ASM
+
+            Este agente tem um probabilidade de 1/20 em cada movimento de ter uma emergência
+            durante o voo caso isto aconteça o ASM redireciona-o para o aeroporto não cheio
+            mais próximo se haja um avião em viagem para esse aeroporto, esse avião é também
+            redirecionado para outro aleatóriamente
+            """
             async def run(self):
+
                 if not self.agent.got_emergency:
+                    #Processo de requesição do caminho numa situação normal
                     if not self.agent.wait_in_airport:
                         if self.agent.on_land:
                             if not self.agent.asked_for_path:
-                                empty_airports = self.agent.environment.get_empty_airports()
 
+                                empty_airports = self.agent.environment.get_empty_airports()
                                 if len(empty_airports) > 0:
                                     end_airport = random.choice(empty_airports)
                                     self.agent.end_airport = end_airport
@@ -272,23 +330,30 @@ class AircraftAgent(Agent):
                         await asyncio.sleep(random_number)
                         self.agent.wait_in_airport = False
                 else:
+                    #Processo de requesição do caminho numa situação de emergência
                     if not self.agent.asked_for_emergency_path:
-                        #print("dasdw")
                         await self.ask_asm_for_path()
-
-
                     else:
                         await self.receive_path()
 
 
             def get_end_airport(self, airport_name):
+                """
+                Função para obter o novo aeroporto destino através do nome que é enviado pelo ASM
+                """
                 for airport in self.agent.environment.airports:
                     if airport.idx == airport_name:
                         self.agent.end_airport = airport
 
 
             async def ask_asm_for_path(self):
+                """
+                Função para requisitar o caminho ao ASM
+                """
                 if not self.agent.got_emergency:
+                    #Processo para requesitar o caminho numa situação normal
+                    #Neste caso o agente informa o ASM da sua posição e para onde quer ir
+                    #O código da mensagem(primeiro quatro digitos) indicam que é uma situação normal
                     msg = Message(to="asm_agent@localhost")
                     msg.set_metadata("performative", "query")
                     msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
@@ -296,20 +361,17 @@ class AircraftAgent(Agent):
                     with open('chatlog.txt', 'a') as file:
                         file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
 
-                    #print(f"{self.agent.idx} - Sending ASM this {msg.body}\n")
-
                     await self.send(msg)
 
                     self.agent.asked_for_path = True
 
-
-
-
                 else:
+                    #Processo para requesitar o caminho numa situação de emergência
+                    #Neste caso o agente apenas informa o ASM da sua posição
+                    #O código da mensagem indica que é uma situação de emergência
                     msg = Message(to="asm_agent@localhost")
                     msg.set_metadata("performative", "query")
                     msg.body = f"0002 {self.agent.position}"
-                    #print(f"AA - Asking ASM for help, I am here {self.agent.position}")
 
                     with open('chatlog.txt', 'a') as file:
                         file.write(f"{self.agent.idx} - Got a problem, asking ASM for help\n\n")
@@ -319,51 +381,67 @@ class AircraftAgent(Agent):
                     new_end_airport_msg = await self.receive(timeout=10)
                     if new_end_airport_msg:
                         self.get_end_airport(new_end_airport_msg.body)
-                        #print(f"AA - My new end airport is {self.agent.end_airport.idx}")
 
                     self.agent.asked_for_emergency_path = True
 
 
             async def receive_path(self):
+                """
+                Função para receber o caminho
+                """
                 if not self.agent.got_emergency:
+                    #Processo para receber o caminho numa situação normal
                     msg_with_path = await self.receive(timeout=10)
+
                     if msg_with_path and msg_with_path.body != "0003":
+                        """
+                        É preciso verificar se a mensage é diferente da mensegem que este 
+                        agente recebe caso vá ser redirecionado(0003) porque por vezes
+                        o agente recebe as mensagens quase ao mesmo tempo e acabavam por ficar 
+                        trocadas
+                        """
+
+                        #Passar o caminho de string para lista
                         self.agent.path = ast.literal_eval(msg_with_path.body)
 
                         with open('chatlog.txt', 'a') as file:
                             file.write(f"{self.agent.idx} - Got this path: {self.agent.path} from {str(msg_with_path.sender)}\n\n")
 
-                        #print(f"{self.agent.idx} - Got this path: {self.agent.path}\n")
-
-
                         self.agent.on_land = False
                         self.agent.start_airport.to_empty()
 
                 else:
+                    #Processo para receber o caminho numa situação de emergência
                     msg_with_path_emergency = await self.receive(timeout=10)
                     if msg_with_path_emergency:
-                        #print(f"AA - Got this emergency path {msg_with_path_emergency.body} from {str(msg_with_path_emergency.sender)}")
 
                         with open('chatlog.txt', 'a') as file:
                             file.write(f"{self.agent.idx} - Got this emergency path {msg_with_path_emergency.body}\n\n")
 
-                        #print(f"AWADAWDWADWA - {msg_with_path.body}")
+                        #Passar o caminho de string para lista
                         self.agent.path = ast.literal_eval(msg_with_path_emergency.body[5:])
-                        #print(f"AA - This is my path now {self.agent.path}")
+
                         self.agent.got_emergency = False
                         self.agent.already_got_emergency = True
 
 
         class WaitForEmergency(CyclicBehaviour):
+            """
+            Comportamento para receber a mensagem a dizer que este avião precisa de ser redirecionado
+            Isto acontece quando este agente está a dirigir-se para um aeroporto e outro avião
+            tem uma emergência e precisa de ir para esse aeroporto
+            """
 
             async def run(self):
+
                 msg = await self.receive()
                 if msg and msg.body == "0003":
+
                     with open('teste.txt', 'a') as file:
                         file.write(f"{self.agent.idx} - Got redirected\n\n")
 
-                    #self.agent.end_airport.to_empty()
-
+                    #Caso receba a mensagem as flags voltam ao estado inicial
+                    #como se estivesse num aeroporto
                     self.agent.end_airport = None
                     self.agent.on_land = True
                     self.agent.asked_for_path = False
@@ -373,49 +451,45 @@ class AircraftAgent(Agent):
                     self.agent.asked_for_emergency_path = False
 
         class Fly(PeriodicBehaviour):
+            """
+            Comportamento para voar, tem uma velocidade de uma posição por segundo
+
+            """
             async def run(self):
 
-
-
                 if not self.agent.on_land:
-                    #print(self.agent.got_emergency)
                     if not self.agent.got_emergency:
-                        random_number = np.random.randint(1, 20)
-                        if random_number == 3 and self.agent.already_got_emergency==False and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport:
-                            #print("Got Emergency")
 
+                        """
+                        Criar uma emergência
+                        Só pode haver uma emergência caso o avião não tenha tido já uma emergência
+                        e o aeroporto mais próximo não seja o de partido ou o de chegada
+                        """
+                        random_number = np.random.randint(1, 20)
+                        if (random_number == 3
+                            and self.agent.already_got_emergency == False
+                            and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport
+                            and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport):
 
                             self.agent.got_emergency = True
                             self.agent.asked_for_path = False
                             self.agent.end_airport.to_empty()
-                        #    await self.ask_asm_for_help()
-                        #    await self.get_emergency_path()
+
                         else:
-
-                            #print(f"AA - My position {self.agent.position}")
-                            #print(f"AA - End position {self.agent.end_airport.position}")
-                            #print(f"AA - My path {self.agent.path}")
-
-
+                            #Se não houver uma emergência neste movimento
+                            #O avião passa para a pŕoxima posição do caminho
                             self.agent.position = self.agent.path.pop(0)
 
-
+                            #Atualizar as coordenadas no ambiente
                             self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
 
-                            #print(self.agent.environment.aircraft_positions[self.agent.idx])
-
-                            #with open('chatlog.txt', 'a') as file:
-                            #    file.write(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
-
-                            #print(f"{self.agent.idx} - Moving to this position {self.agent.position}\n")
-
-                            #self.agent.environment.print_environment()
-
-
+                            #Se a posição for a posição final (chegou ao destino)
                             if self.agent.position == self.agent.end_airport.position:
+
                                 with open('chatlog.txt', 'a') as file:
                                     file.write(f"{self.agent.idx} - I have arrived\n\n")
 
+                                #Volta ao estado inicial
                                 self.agent.start_airport = self.agent.end_airport
                                 self.agent.end_airport = None
                                 self.agent.on_land = True
@@ -427,37 +501,6 @@ class AircraftAgent(Agent):
                                 self.agent.asked_for_emergency_path = False
 
 
-
-
-
-
-            async def get_emergency_path(self):
-                await asyncio.sleep(1)
-
-                new_path = await self.receive()
-                if new_path and new_path.body[0:4] == "0002":
-                    #print(f"AA - Emergency - Got this path {new_path.body[4:]}")
-
-                    self.agent.path = ast.literal_eval(new_path.body[4:])
-                    self.agent.got_emergency = True
-
-
-            async def ask_asm_for_help(self):
-
-                msg = Message(to="asm_agent@localhost")
-                msg.set_metadata("performative", "query")
-                msg.body = f"0002 {self.agent.position}"
-
-                #print("AA - Asking ASM for help")
-
-                with open('chatlog.txt', 'a') as file:
-                    file.write(f"{self.agent.idx} - Got a problem, asking ASM for help\n\n")
-
-                await self.send(msg)
-
-
-
-
         self.add_behaviour(WaitForEmergency())
         self.add_behaviour(Fly(2))
         self.add_behaviour(GetPath())
@@ -465,6 +508,9 @@ class AircraftAgent(Agent):
 
 
 class AirSpaceManager(Agent):
+    """
+    
+    """
     def __init__(self, jid, password, environment):
         super().__init__(jid, password)
         self.environment = environment
@@ -866,7 +912,6 @@ async def main():
 
     aircraft_agent_2 = AircraftAgent("aircraft_agent_2@localhost", "password", environment, "A2", airport_2)
     await aircraft_agent_2.start(auto_register=True)
-
 
     aircraft_agent_3 = AircraftAgent("aircraft_agent_3@localhost", "password", environment, "A3", airport_3)
     await aircraft_agent_3.start(auto_register=True)
