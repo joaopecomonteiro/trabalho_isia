@@ -1,3 +1,10 @@
+"""
+COM - Communication Agent
+ASM - Air Space Manager Agent
+CC - Central Coordination Agent
+"""
+
+
 import numpy as np
 import os
 import re
@@ -167,7 +174,7 @@ class Environment:
 class CommunicationAgent(Agent):
     """
     Agente encarregue de imprimir a matriz, os aeroportos (incluindo o seu estado e o avião associado ao aeroporto)
-     e alguns avisos que recebe do Air Space Manager(ASM),
+     e alguns avisos que recebe do ASM,
     estes avisos podem ser uma emergência de um avião ou o redirecionamento de um avião
 
     A matriz imprimida é uma matriz de dua dimensões que representa o espaço aéreo (é ignorada a altura)
@@ -263,6 +270,10 @@ class CommunicationAgent(Agent):
 class AircraftAgent(Agent):
     """
     Agente que representa os aviões
+    Este agente tem um probabilidade de 1/20 em cada movimento de ter uma emergência
+    durante o voo caso isto aconteça o ASM redireciona-o para o aeroporto não cheio
+    mais próximo se haja um avião em viagem para esse aeroporto, esse avião é também
+    redirecionado para outro aleatóriamente
 
     Argumentos:
     jid - jid do agente
@@ -286,6 +297,7 @@ class AircraftAgent(Agent):
         self.path = None
 
         #Flags
+        self.begin_flight = True
         self.on_land = True
         self.asked_for_path = False
         self.wait_in_airport = True
@@ -302,25 +314,24 @@ class AircraftAgent(Agent):
             """
             Comportamento para pedir e receber o caminho do voo
             Todas comunicações são feitas com o ASM
-
-            Este agente tem um probabilidade de 1/20 em cada movimento de ter uma emergência
-            durante o voo caso isto aconteça o ASM redireciona-o para o aeroporto não cheio
-            mais próximo se haja um avião em viagem para esse aeroporto, esse avião é também
-            redirecionado para outro aleatóriamente
             """
             async def run(self):
 
                 if not self.agent.got_emergency:
                     #Processo de requesição do caminho numa situação normal
                     if not self.agent.wait_in_airport:
-                        if self.agent.on_land:
+                        if self.agent.begin_flight:
                             if not self.agent.asked_for_path:
 
                                 empty_airports = self.agent.environment.get_empty_airports()
                                 if len(empty_airports) > 0:
                                     end_airport = random.choice(empty_airports)
+                                    end_airport.to_reserved(str(self.agent.jid))
                                     self.agent.end_airport = end_airport
-                                    self.agent.end_position = end_airport.position
+
+                                    #with open('teste.txt', 'a') as file:
+                                    #    file.write(f"{self.agent.idx} - Reserving this airport {end_airport.idx} - {end_airport.status} - {end_airport.airplane}\n{self.agent.end_airport.airplane}\n")
+
                                     await self.ask_asm_for_path()
 
                             else:
@@ -351,24 +362,37 @@ class AircraftAgent(Agent):
                 Função para requisitar o caminho ao ASM
                 """
                 if not self.agent.got_emergency:
-                    #Processo para requesitar o caminho numa situação normal
-                    #Neste caso o agente informa o ASM da sua posição e para onde quer ir
-                    #O código da mensagem(primeiro quatro digitos) indicam que é uma situação normal
+                    """
+                    Processo para requesitar o caminho numa situação normal
+                    Neste caso o agente informa o ASM da sua posição e para onde quer ir
+                    O código da mensagem(primeiro quatro digitos) indicam que é uma situação normal
+                    a seguir ao código seguem-se as coordenadas iniciais e finais da viagem
+                    """
+
                     msg = Message(to="asm_agent@localhost")
-                    msg.set_metadata("performative", "query")
-                    msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
+                    msg.set_metadata("performative", "request")
+                    if self.agent.on_land:
+                        msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
+                    else:
+                        msg.body = f"0001 {self.agent.position} {self.agent.end_airport.position}"
 
                     with open('chatlog.txt', 'a') as file:
                         file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
+
+                    #with open('teste.txt', 'a') as file:
+                    #    file.write(f"{self.agent.idx} - Sending ASM this {self.agent.on_land}\n\n")
 
                     await self.send(msg)
 
                     self.agent.asked_for_path = True
 
                 else:
-                    #Processo para requesitar o caminho numa situação de emergência
-                    #Neste caso o agente apenas informa o ASM da sua posição
-                    #O código da mensagem indica que é uma situação de emergência
+                    """
+                    Processo para requesitar o caminho numa situação de emergência
+                    Neste caso o agente apenas informa o ASM da sua posição
+                    O código da mensagem indica que é uma situação de emergência
+                    a seguir ao código seguem-se as coordenadas do avião
+                    """
                     msg = Message(to="asm_agent@localhost")
                     msg.set_metadata("performative", "query")
                     msg.body = f"0002 {self.agent.position}"
@@ -378,6 +402,7 @@ class AircraftAgent(Agent):
 
                     await self.send(msg)
 
+                    #Mensagem com o nome do novo aeroporto de destino
                     new_end_airport_msg = await self.receive(timeout=10)
                     if new_end_airport_msg:
                         self.get_end_airport(new_end_airport_msg.body)
@@ -391,8 +416,8 @@ class AircraftAgent(Agent):
                 """
                 if not self.agent.got_emergency:
                     #Processo para receber o caminho numa situação normal
-                    msg_with_path = await self.receive(timeout=10)
 
+                    msg_with_path = await self.receive(timeout=10)
                     if msg_with_path and msg_with_path.body != "0003":
                         """
                         É preciso verificar se a mensage é diferente da mensegem que este 
@@ -407,10 +432,12 @@ class AircraftAgent(Agent):
                         with open('chatlog.txt', 'a') as file:
                             file.write(f"{self.agent.idx} - Got this path: {self.agent.path} from {str(msg_with_path.sender)}\n\n")
 
+                        self.agent.begin_flight = False
                         self.agent.on_land = False
                         self.agent.start_airport.to_empty()
 
                 else:
+
                     #Processo para receber o caminho numa situação de emergência
                     msg_with_path_emergency = await self.receive(timeout=10)
                     if msg_with_path_emergency:
@@ -437,13 +464,12 @@ class AircraftAgent(Agent):
                 msg = await self.receive()
                 if msg and msg.body == "0003":
 
-                    with open('teste.txt', 'a') as file:
-                        file.write(f"{self.agent.idx} - Got redirected\n\n")
+                    #with open('teste.txt', 'a') as file:
+                    #    file.write(f"{self.agent.idx} - Got redirected\n\n")
 
                     #Caso receba a mensagem as flags voltam ao estado inicial
-                    #como se estivesse num aeroporto
                     self.agent.end_airport = None
-                    self.agent.on_land = True
+                    self.agent.begin_flight = True
                     self.agent.asked_for_path = False
                     self.agent.wait_in_airport = True
                     self.agent.already_got_emergency = False
@@ -453,11 +479,10 @@ class AircraftAgent(Agent):
         class Fly(PeriodicBehaviour):
             """
             Comportamento para voar, tem uma velocidade de uma posição por segundo
-
             """
             async def run(self):
 
-                if not self.agent.on_land:
+                if not self.agent.begin_flight:
                     if not self.agent.got_emergency:
 
                         """
@@ -483,6 +508,9 @@ class AircraftAgent(Agent):
                             #Atualizar as coordenadas no ambiente
                             self.agent.environment.aircraft_positions[self.agent.idx] = self.agent.position
 
+                            #with open('teste.txt', 'a') as file:
+                            #    file.write(f"{self.agent.idx} - {self.agent.end_airport}\n\n")
+
                             #Se a posição for a posição final (chegou ao destino)
                             if self.agent.position == self.agent.end_airport.position:
 
@@ -492,6 +520,7 @@ class AircraftAgent(Agent):
                                 #Volta ao estado inicial
                                 self.agent.start_airport = self.agent.end_airport
                                 self.agent.end_airport = None
+                                self.agent.begin_flight = True
                                 self.agent.on_land = True
                                 self.agent.asked_for_path = False
                                 self.agent.start_airport.to_full(self.agent.jid)
@@ -509,7 +538,22 @@ class AircraftAgent(Agent):
 
 class AirSpaceManager(Agent):
     """
-    
+    Agente que gere o espaço aéreo
+    Este agente recebe o aviso do avião que quer partir, pede ao CC o caminho
+    e envia-o ao avião
+    É também, em caso de emergência responsável por identificar qual é o aeroporto mais
+    próximo do avião com problemas e avisar, caso seja necessário, outro avião que precisa de
+    ser redirecionado
+
+    Argumentos:
+    jid - jid do agente
+    password - password do agente
+    environment - ambiente
+    AA_wait_queue - fila de aviões que estão à espera que este agente lhes dê o caminho
+    para poderem partir
+    aircraft_data - jid, posição inicial e posição final do  agente que requisitou o caminho
+
+    Para além dos argumentos tem também alguma flags que facilitam o funcinamento do agente
     """
     def __init__(self, jid, password, environment):
         super().__init__(jid, password)
@@ -517,6 +561,7 @@ class AirSpaceManager(Agent):
         self.AA_wait_queue = []
         self.aircraft_data = None
 
+        #Flags
         self.waiting_for_path = False
         self.asked_for_path = False
 
@@ -524,43 +569,77 @@ class AirSpaceManager(Agent):
     async def setup(self):
 
         class WaitForAAMessages(CyclicBehaviour):
-
+            """
+            Comportamento para receber mensagens de aviões que querem partir,
+            após receber a mensagem coloca-o avião que a mandou no fim da fila
+            Caso o avião que envie a mensagem esteja numa situação de emergência
+            o ASM trata logo do caso
+            """
             async def run(self):
 
                 msg = await self.receive(timeout=10)
                 if msg and str(msg.sender)[0:8] == "aircraft":
-                    #print(f"ASM - {msg.body}")
+                    """
+                    separeted_text é uma lista com o conteúdo da mensagem
+                    Os primeiro 4 digitos da mensagem é um código de 4 algarismos e 
+                    depois seguem-se as coordenadas. Este função(re.findall) com este
+                    padrão(o primeiro argumento da função) apena separa a string em palavras, 
+                    e considera tudo o que está dentro de parenteses como uma palavra
+                    por exemplo, se a mensagem for "0001 (0, 0, 0) (1, 1, 1)" a lista fica
+                    ["0001", "(0, 0, 0)", "(1, 1, 1)"]
+                    """
                     separated_text = re.findall(r'\(.*?\)|\w+', msg.body)
                     code = separated_text[0]
 
 
                     if code == "0001":
+                        """
+                        Quando o código é 0001, é uma situação normal
+                        a seguir ao código vêm as coordenadas iniciais e as finais
+                        """
                         start_position = separated_text[1]
                         end_position = separated_text[2]
-                        self.reserve_airport(end_position, str(msg.sender))
+
+                        #O aeroporto destino é reservado para este avião
+                        #self.reserve_airport(end_position, str(msg.sender))
 
                         self.agent.AA_wait_queue.append((str(msg.sender), start_position, end_position))
 
                         with open('chatlog.txt', 'a') as file:
                             file.write(f"ASM - Added {str(msg.sender)} to the AA wait queue with the start position: {start_position} and end position: {end_position}\n\n")
 
-                        #print(f"ASM - Added {str(msg.sender)} to the AA wait queue with the start position: {start_position} and end position: {end_position}\n")
 
                     if code == "0002":
+                        """
+                        Quando o código é 0002, é uma situação de emergência
+                        a seguir ao código vêm só as coordenadas iniciais
+                        """
 
+                        #Mensagem para o COM com o que ele deve imprimir
                         warning_msg = Message(to="com_agent@localhost")
                         warning_msg.body = f"{str(msg.sender)} Got an emergency!"
                         await self.send(warning_msg)
 
-
+                        """
+                        Esta função(ast.literal_eval) transforma a string na sua estrutura literal
+                        por exemplo, a string "(0, 0, 0)" passa a ser o tuple (0, 0, 0)
+                        """
                         start_position = ast.literal_eval(separated_text[1])
-                        #end_position = ast.literal_eval(separated_text[2])
-                        closest_airport = self.agent.environment.get_closest_not_full_airport(start_position)
-                        print(f"{closest_airport.idx} - {closest_airport.status}")
 
+                        #Aeroporto não cheio mais próximo
+                        closest_airport = self.agent.environment.get_closest_not_full_airport(start_position)
 
                         if closest_airport.is_reserved():
+                            """
+                            Caso este aeroport esteja reservado, avisa o avião que se dirijia para
+                            ele que precisa de ser redirecionado e manda mensagem ao COM com o aviso
+                            que ele deve imprimir
+                            O código que envia para o avião é 0003
+                            """
                             aircraft_to_redirect = closest_airport.airplane
+                            with open('teste.txt', 'a') as file:
+                                file.write(f"ASM - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
+
                             redirect_msg = Message(to=aircraft_to_redirect)
                             redirect_msg.body = "0003"
                             await self.send(redirect_msg)
@@ -569,41 +648,48 @@ class AirSpaceManager(Agent):
                             redirect_warning_msg.body = f"Redirecting {aircraft_to_redirect}"
                             await self.send(redirect_warning_msg)
 
-                            with open('teste.txt', 'a') as file:
-                                file.write(f"ASM - Redirecting {aircraft_to_redirect}\n\n")
+                            #with open('teste.txt', 'a') as file:
+                            #    file.write(f"ASM - Redirecting {aircraft_to_redirect}\n\n")
 
+                        #Dizer ao avião o seu novo aeroporto
                         await self.tell_aa_new_end_airport(str(msg.sender), closest_airport.idx)
+
+                        """
+                        Preencher o aeroporto, neste caso o aeroporto fica cheio e nao reservado
+                        para este avião não ter que ser redirecionado no caso de haver outra emergência
+                        """
                         self.fill_airport(str(closest_airport.position), str(msg.sender))
 
-
+                        #Pedir ao CC o novo caminho
                         await self.emergency_ask_cc_for_path(start_position, closest_airport.position)
 
+                        #Resposta do CC com o caminho
                         response = await self.receive(timeout=10)
+                        if response and str(response.sender) == "cc_agent@localhost" and response.body[0:4] == "0002":
 
-                        if response and str(response.sender) == "cc_agent@localhost" and response.body[0:4]=="0002":
+                            #Mensagem com o novo caminho para enviar ao avião
                             msg_with_path = Message(to=str(msg.sender))
-                            msg_with_path.set_metadata("performative", "query")
+                            msg_with_path.set_metadata("performative", "inform")
                             msg_with_path.body = f"0002 {response.body[5:]}"
 
                             with open('chatlog.txt', 'a') as file:
                                 file.write(f"ASM - Sending AA this emergency path {msg_with_path.body}\n\n")
 
-                            #print(f"ASM - Sending AA this emergency path {msg_with_path.body}")
-
-
-
                             await self.send(msg_with_path)
 
             async def tell_aa_new_end_airport(self, aircraft, airport):
-
+                """
+                Função para enviar o nome do aeroporto ao avião
+                """
                 msg = Message(to=aircraft)
                 msg.set_metadata("performative", "query")
                 msg.body = airport
-
                 await self.send(msg)
 
             async def emergency_ask_cc_for_path(self, start_position, end_position):
-
+                """
+                Função para pedir o caminho ao CC
+                """
                 msg = Message(to="cc_agent@localhost")
                 msg.set_metadata("performative", "query")
                 msg.body = f"0002 {start_position} {end_position}"
@@ -611,7 +697,6 @@ class AirSpaceManager(Agent):
                 with open('chatlog.txt', 'a') as file:
                     file.write(f"ASM - Emergency - Asked CC for the path from {start_position} to {end_position}\n\n")
 
-                #print(f"ASM - Emergency - Asked CC for the path from {start_position} to {end_position}\n")
                 await self.send(msg)
 
 
@@ -619,7 +704,9 @@ class AirSpaceManager(Agent):
 
 
             def fill_airport(self, position, aircraft):
-
+                """
+                Função para tornar cheio o aeroporto
+                """
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
                         airport.to_full(aircraft)
@@ -627,33 +714,38 @@ class AirSpaceManager(Agent):
 
 
             def reserve_airport(self, position, aircraft):
-
+                """
+                Função para reservar o aeroporto
+                """
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
                         airport.to_reserved(aircraft)
 
 
         class GetPath(CyclicBehaviour):
-
+            """
+            Comportamento para receber o caminho enviado pelo CC
+            e enviá-lo para o avião
+            """
             async def run(self):
+
                 if not self.agent.waiting_for_path:
+                    #Retirar o primeiro da lista
                     if len(self.agent.AA_wait_queue) > 0:
-                        #print("ok")
-                        self.agent.aircraft_data = self.agent.AA_wait_queue.pop()
-                        #print(self.agent.aircraft_data)
+                        self.agent.aircraft_data = self.agent.AA_wait_queue.pop(0)
                         self.agent.waiting_for_path = True
+
                 else:
                     if not self.agent.asked_for_path:
+                        #Pedir o caminho so CC
                         await self.ask_cc_for_path()
 
                     else:
-
+                        #Mensagem enviada pelo CC com o caminho
                         msg = await self.receive()
-                        if msg and str(msg.sender) == "cc_agent@localhost" and msg.body[0:4]=="0001":
-                            #print(f"ASM - Got this path {msg.body}")
-
+                        if msg and str(msg.sender) == "cc_agent@localhost" and msg.body[0:4] == "0001":
                             msg_with_path = Message(to=self.agent.aircraft_data[0])
-                            msg_with_path.set_metadata("performative", "query")
+                            msg_with_path.set_metadata("performative", "informative")
                             msg_with_path.body = msg.body[5:]
 
                             await self.send(msg_with_path)
@@ -922,8 +1014,8 @@ async def main():
     aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
     await aircraft_agent_5.start(auto_register=True)
 
-    #aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
-    #await aircraft_agent_6.start(auto_register=True)
+    aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
+    await aircraft_agent_6.start(auto_register=True)
 
 if __name__ == "__main__":
     spade.run(main())
