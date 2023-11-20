@@ -306,7 +306,7 @@ class AircraftAgent(Agent):
         self.asked_for_emergency_path = False
 
         #Preencher o aeroporto inicial
-        self.start_airport.to_full(self.jid)
+        self.start_airport.to_full(str(self.jid))
 
     async def setup(self):
 
@@ -434,7 +434,11 @@ class AircraftAgent(Agent):
 
                         self.agent.begin_flight = False
                         self.agent.on_land = False
-                        self.agent.start_airport.to_empty()
+                        with open('teste.txt', 'a') as file:
+                            file.write(f"{str(self.agent.jid)} - {self.agent.start_airport.airplane}\n\n")
+
+                        if str(self.agent.start_airport.airplane) == str(self.agent.jid):
+                            self.agent.start_airport.to_empty()
 
                 else:
 
@@ -445,7 +449,7 @@ class AircraftAgent(Agent):
                         with open('chatlog.txt', 'a') as file:
                             file.write(f"{self.agent.idx} - Got this emergency path {msg_with_path_emergency.body}\n\n")
 
-                        #Passar o caminho de string para lista
+                        #Passar o caminho de string para uma lista
                         self.agent.path = ast.literal_eval(msg_with_path_emergency.body[5:])
 
                         self.agent.got_emergency = False
@@ -492,7 +496,7 @@ class AircraftAgent(Agent):
                         """
                         random_number = np.random.randint(1, 20)
                         if (random_number == 3
-                            and self.agent.already_got_emergency == False
+                            and not self.agent.already_got_emergency
                             and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.start_airport
                             and self.agent.environment.get_closest_not_full_airport(self.agent.position) != self.agent.end_airport):
 
@@ -523,7 +527,7 @@ class AircraftAgent(Agent):
                                 self.agent.begin_flight = True
                                 self.agent.on_land = True
                                 self.agent.asked_for_path = False
-                                self.agent.start_airport.to_full(self.agent.jid)
+                                self.agent.start_airport.to_full(str(self.agent.jid))
                                 self.agent.wait_in_airport = True
                                 self.agent.already_got_emergency = False
                                 self.agent.got_emergency = False
@@ -629,6 +633,9 @@ class AirSpaceManager(Agent):
                         #Aeroporto não cheio mais próximo
                         closest_airport = self.agent.environment.get_closest_not_full_airport(start_position)
 
+                        #with open('teste.txt', 'a') as file:
+                        #    file.write(f"ASM - {str(msg.sender)} - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
+
                         if closest_airport.is_reserved():
                             """
                             Caso este aeroport esteja reservado, avisa o avião que se dirijia para
@@ -637,8 +644,8 @@ class AirSpaceManager(Agent):
                             O código que envia para o avião é 0003
                             """
                             aircraft_to_redirect = closest_airport.airplane
-                            with open('teste.txt', 'a') as file:
-                                file.write(f"ASM - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
+                            #with open('teste.txt', 'a') as file:
+                            #    file.write(f"ASM - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
 
                             redirect_msg = Message(to=aircraft_to_redirect)
                             redirect_msg.body = "0003"
@@ -709,7 +716,7 @@ class AirSpaceManager(Agent):
                 """
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
-                        airport.to_full(aircraft)
+                        airport.to_full(str(aircraft))
 
 
 
@@ -719,7 +726,7 @@ class AirSpaceManager(Agent):
                 """
                 for airport in self.agent.environment.airports:
                     if airport.position == ast.literal_eval(position):
-                        airport.to_reserved(aircraft)
+                        airport.to_reserved(str(aircraft))
 
 
         class GetPath(CyclicBehaviour):
@@ -1014,8 +1021,8 @@ async def main():
     aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
     await aircraft_agent_5.start(auto_register=True)
 
-    aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
-    await aircraft_agent_6.start(auto_register=True)
+    #aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
+    #await aircraft_agent_6.start(auto_register=True)
 
 if __name__ == "__main__":
     spade.run(main())
