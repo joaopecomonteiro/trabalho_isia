@@ -401,7 +401,7 @@ class AircraftAgent(Agent):
                     """
 
                     msg = Message(to="asm_agent@localhost")
-                    msg.set_metadata("performative", "query")
+                    msg.set_metadata("performative", "inform")
                     msg.body = f"0002 {self.agent.position}"
 
                     with open('chatlog.txt', 'a') as file:
@@ -618,6 +618,7 @@ class AirSpaceManager(Agent):
                         #Mensagem para o COM com o que ele deve imprimir
                         warning_msg = Message(to="com_agent@localhost")
                         warning_msg.body = f"{str(msg.sender)} Got an emergency!"
+                        warning_msg.set_metadata("performative", "inform")
                         await self.send(warning_msg)
 
                         """
@@ -642,10 +643,12 @@ class AirSpaceManager(Agent):
 
                             redirect_msg = Message(to=aircraft_to_redirect)
                             redirect_msg.body = "0003"
+                            redirect_msg.set_metadata("performative", "inform")
                             await self.send(redirect_msg)
 
                             redirect_warning_msg = Message(to="com_agent@localhost")
                             redirect_warning_msg.body = f"Redirecting {aircraft_to_redirect}"
+                            redirect_warning_msg.set_metadata("performative", "inform")
                             await self.send(redirect_warning_msg)
 
                         #Dizer ao avião o seu novo aeroporto
@@ -681,6 +684,10 @@ class AirSpaceManager(Agent):
                 msg = Message(to=aircraft)
                 msg.set_metadata("performative", "inform")
                 msg.body = airport
+
+                with open('chatlog.txt', 'a') as file:
+                    file.write(f"ASM - Telling {aircraft} his new airport\n\n")
+
                 await self.send(msg)
 
             async def emergency_ask_cc_for_path(self, start_position, end_position):
