@@ -2,8 +2,15 @@
 COM - Communication Agent
 ASM - Air Space Manager Agent
 CC - Central Coordination Agent
-"""
 
+Output:
+As comunicações entre agentes ficam registadas num ficheiro chamado chatlog.txt
+No terminal é imprimida uma matriz 15x15 onde representados os aeroportos pelos seus estados(E, R, F),
+os aviões representados pelo seu número e as coordenadas (x, y) onde os aviões não podem passar,
+o aeroporto militar, representado por A's e o pico da montanha representado por um P
+O aeroporto militar impede os aviões de passar no seu espaço aéreo, obrigando-os a contorná-lo
+A montanha impede os aviões de passar à sua volta numa altura mais baixa, obrigando-os a subir a altitude
+"""
 
 import numpy as np
 import os
@@ -18,12 +25,16 @@ from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour, PeriodicBehaviour
 from spade.message import Message
 
+#Tamanho da matriz (15x15x4)
 SIZE = 15
 HEIGHT = 4
 
 #Matrix do ambiente
 environment_matrix = np.zeros((SIZE, SIZE, HEIGHT)).astype(int).astype(str)
 
+"""
+Para simplificar, todas as posições proibidas são representadas com um X
+"""
 
 for y in range(SIZE): #Proibir o chão
     for x in range(SIZE):
@@ -73,7 +84,8 @@ class Node:
 
 class Airport:
     """
-    Classe para os aeroportos
+    Classe para os aeroportos, cada aeroporto, caso esteja cheio ou reservado,
+    tem um avião associado que é o avião que está lá ou se está a dirigir para lá
 
     Argumentos:
     position - coordenadas do aeroporto
@@ -285,7 +297,7 @@ class AircraftAgent(Agent):
     position - posição num determinado momento
     path - caminho a percorrer no voo
 
-    Para além dos argumentos tem também alguma flags que facilitam o funcinamento do agente
+    Para além dos argumentos tem também algumas flags que facilitam o funcinamento do agente
     """
     def __init__(self, jid, password, environment, idx, start_airport):
         super().__init__(jid, password)
@@ -328,10 +340,6 @@ class AircraftAgent(Agent):
                                     end_airport = random.choice(empty_airports)
                                     end_airport.to_reserved(str(self.agent.jid))
                                     self.agent.end_airport = end_airport
-
-                                    #with open('teste.txt', 'a') as file:
-                                    #    file.write(f"{self.agent.idx} - Reserving this airport {end_airport.idx} - {end_airport.status} - {end_airport.airplane}\n{self.agent.end_airport.airplane}\n")
-
                                     await self.ask_asm_for_path()
 
                             else:
@@ -371,16 +379,14 @@ class AircraftAgent(Agent):
 
                     msg = Message(to="asm_agent@localhost")
                     msg.set_metadata("performative", "request")
+
                     if self.agent.on_land:
                         msg.body = f"0001 {self.agent.start_airport.position} {self.agent.end_airport.position}"
                     else:
                         msg.body = f"0001 {self.agent.position} {self.agent.end_airport.position}"
 
                     with open('chatlog.txt', 'a') as file:
-                        file.write(f"{self.agent.idx} - Sending ASM this {msg.body}\n\n")
-
-                    #with open('teste.txt', 'a') as file:
-                    #    file.write(f"{self.agent.idx} - Sending ASM this {self.agent.on_land}\n\n")
+                        file.write(f"{self.agent.idx} - I want to take off, asking ASM the path\n\n")
 
                     await self.send(msg)
 
@@ -393,6 +399,7 @@ class AircraftAgent(Agent):
                     O código da mensagem indica que é uma situação de emergência
                     a seguir ao código seguem-se as coordenadas do avião
                     """
+
                     msg = Message(to="asm_agent@localhost")
                     msg.set_metadata("performative", "query")
                     msg.body = f"0002 {self.agent.position}"
@@ -430,15 +437,11 @@ class AircraftAgent(Agent):
                         self.agent.path = ast.literal_eval(msg_with_path.body)
 
                         with open('chatlog.txt', 'a') as file:
-                            file.write(f"{self.agent.idx} - Got this path: {self.agent.path} from {str(msg_with_path.sender)}\n\n")
+                            file.write(f"{self.agent.idx} - Got this path: {self.agent.path}\n\n")
 
                         self.agent.begin_flight = False
                         self.agent.on_land = False
-                        with open('teste.txt', 'a') as file:
-                            file.write(f"{str(self.agent.jid)} - {self.agent.start_airport.airplane}\n\n")
-
-                        if str(self.agent.start_airport.airplane) == str(self.agent.jid):
-                            self.agent.start_airport.to_empty()
+                        self.agent.start_airport.to_empty()
 
                 else:
 
@@ -467,10 +470,6 @@ class AircraftAgent(Agent):
 
                 msg = await self.receive()
                 if msg and msg.body == "0003":
-
-                    #with open('teste.txt', 'a') as file:
-                    #    file.write(f"{self.agent.idx} - Got redirected\n\n")
-
                     #Caso receba a mensagem as flags voltam ao estado inicial
                     self.agent.end_airport = None
                     self.agent.begin_flight = True
@@ -604,9 +603,6 @@ class AirSpaceManager(Agent):
                         start_position = separated_text[1]
                         end_position = separated_text[2]
 
-                        #O aeroporto destino é reservado para este avião
-                        #self.reserve_airport(end_position, str(msg.sender))
-
                         self.agent.AA_wait_queue.append((str(msg.sender), start_position, end_position))
 
                         with open('chatlog.txt', 'a') as file:
@@ -633,9 +629,6 @@ class AirSpaceManager(Agent):
                         #Aeroporto não cheio mais próximo
                         closest_airport = self.agent.environment.get_closest_not_full_airport(start_position)
 
-                        #with open('teste.txt', 'a') as file:
-                        #    file.write(f"ASM - {str(msg.sender)} - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
-
                         if closest_airport.is_reserved():
                             """
                             Caso este aeroport esteja reservado, avisa o avião que se dirijia para
@@ -644,8 +637,8 @@ class AirSpaceManager(Agent):
                             O código que envia para o avião é 0003
                             """
                             aircraft_to_redirect = closest_airport.airplane
-                            #with open('teste.txt', 'a') as file:
-                            #    file.write(f"ASM - {closest_airport.idx} - {closest_airport.status} - {closest_airport.airplane}\n\n")
+                            with open('chatlog.txt', 'a') as file:
+                                file.write(f"ASM - Telling {aircraft_to_redirect} he has to be redirected\n\n")
 
                             redirect_msg = Message(to=aircraft_to_redirect)
                             redirect_msg.body = "0003"
@@ -654,9 +647,6 @@ class AirSpaceManager(Agent):
                             redirect_warning_msg = Message(to="com_agent@localhost")
                             redirect_warning_msg.body = f"Redirecting {aircraft_to_redirect}"
                             await self.send(redirect_warning_msg)
-
-                            #with open('teste.txt', 'a') as file:
-                            #    file.write(f"ASM - Redirecting {aircraft_to_redirect}\n\n")
 
                         #Dizer ao avião o seu novo aeroporto
                         await self.tell_aa_new_end_airport(str(msg.sender), closest_airport.idx)
@@ -680,7 +670,7 @@ class AirSpaceManager(Agent):
                             msg_with_path.body = f"0002 {response.body[5:]}"
 
                             with open('chatlog.txt', 'a') as file:
-                                file.write(f"ASM - Sending AA this emergency path {msg_with_path.body}\n\n")
+                                file.write(f"ASM - Sending {str(msg.sender)} this emergency path {msg_with_path.body}\n\n")
 
                             await self.send(msg_with_path)
 
@@ -689,7 +679,7 @@ class AirSpaceManager(Agent):
                 Função para enviar o nome do aeroporto ao avião
                 """
                 msg = Message(to=aircraft)
-                msg.set_metadata("performative", "query")
+                msg.set_metadata("performative", "inform")
                 msg.body = airport
                 await self.send(msg)
 
@@ -698,16 +688,13 @@ class AirSpaceManager(Agent):
                 Função para pedir o caminho ao CC
                 """
                 msg = Message(to="cc_agent@localhost")
-                msg.set_metadata("performative", "query")
+                msg.set_metadata("performative", "request")
                 msg.body = f"0002 {start_position} {end_position}"
 
                 with open('chatlog.txt', 'a') as file:
-                    file.write(f"ASM - Emergency - Asked CC for the path from {start_position} to {end_position}\n\n")
+                    file.write(f"ASM - Asked CC for the path from {start_position} to {end_position}\n\n")
 
                 await self.send(msg)
-
-
-
 
 
             def fill_airport(self, position, aircraft):
@@ -718,15 +705,6 @@ class AirSpaceManager(Agent):
                     if airport.position == ast.literal_eval(position):
                         airport.to_full(str(aircraft))
 
-
-
-            def reserve_airport(self, position, aircraft):
-                """
-                Função para reservar o aeroporto
-                """
-                for airport in self.agent.environment.airports:
-                    if airport.position == ast.literal_eval(position):
-                        airport.to_reserved(str(aircraft))
 
 
         class GetPath(CyclicBehaviour):
@@ -752,15 +730,14 @@ class AirSpaceManager(Agent):
                         msg = await self.receive()
                         if msg and str(msg.sender) == "cc_agent@localhost" and msg.body[0:4] == "0001":
                             msg_with_path = Message(to=self.agent.aircraft_data[0])
-                            msg_with_path.set_metadata("performative", "informative")
+                            msg_with_path.set_metadata("performative", "inform")
                             msg_with_path.body = msg.body[5:]
 
                             await self.send(msg_with_path)
 
                             with open('chatlog.txt', 'a') as file:
-                                file.write(f"ASM - Sending this path {msg_with_path.body} to {self.agent.aircraft_data[0]}\n\n")
+                                file.write(f"ASM - Sending {self.agent.aircraft_data[0]} his path\n\n")
 
-                            #print(f"ASM - Sending this path {msg_with_path.body} to {self.agent.aircraft_data[0]}\n")
                             self.agent.waiting_for_path = False
                             self.agent.asked_for_path = False
 
@@ -769,21 +746,22 @@ class AirSpaceManager(Agent):
 
 
             async def ask_cc_for_path(self):
+                """
+                Função para pedir o caminho ao CC
+                """
 
                 start_position = self.agent.aircraft_data[1]
                 end_position = self.agent.aircraft_data[2]
 
                 msg = Message(to="cc_agent@localhost")
-                msg.set_metadata("performative", "query")
+                msg.set_metadata("performative", "request")
                 msg.body = f"0001 {start_position} {end_position}"
 
                 with open('chatlog.txt', 'a') as file:
-                    file.write(f"ASM - Asked CC for the path from {start_position} to {end_position}\n\n")
+                    file.write(f"ASM - Asking CC for the path from {start_position} to {end_position}\n\n")
 
-                #print(f"ASM - Asked CC for the path from {start_position} to {end_position}\n")
                 await self.send(msg)
                 self.agent.asked_for_path = True
-
 
 
         self.add_behaviour(GetPath())
@@ -793,89 +771,75 @@ class AirSpaceManager(Agent):
 
 
 class CentralCoordinationAgent(Agent):
+    """
+    Agente responsável por calcular os caminhos
+    este agente recebe uma mensagem do ASM com as coordenadas e responde com
+    o caminho da viagem
+
+    Argumentos:
+    jid - jid do agente
+    password - password do agente
+    environment - ambiente
+    path - caminho calculado que vai ser enviado
+
+    Para além dos argumentos tem também alguma flags que facilitam o funcinamento do agente
+    """
     def __init__(self, jid, password, environment):
         super().__init__(jid, password)
         self.environment = environment
         self.path = None
 
+        #Flags
         self.got_path = False
         self.got_coordinates = False
 
     async def setup(self):
 
         class GetPath(CyclicBehaviour):
-
+            """
+            Comportamento para calular e enviar o caminho ao ASM
+            """
             async def run(self):
-                #print()
-                #if not self.agent.got_path:
 
+                #Mensagem com as coordenadas enviada pelo ASM
                 msg = await self.receive(timeout=10)
                 if msg:
-                    #print(f"CC - {msg.body}")
                     separated_text = re.findall(r'\(.*?\)|\w+', msg.body)
                     code = separated_text[0]
                     start_position = ast.literal_eval(separated_text[1])
                     end_position = ast.literal_eval(separated_text[2])
 
-                    """
-                    
-                    tuple_strings = msg.body.split()
-                    tuples = []
+                    path = self.astar(start_position, end_position)
+                    msg_with_path = Message(to="asm_agent@localhost")
+                    msg_with_path.set_metadata("performative", "inform")
 
-                    for tuple_str in tuple_strings:
-                        # Split the tuple string by comma, remove parentheses, and filter out empty strings
-                        elements = tuple(filter(None, tuple_str.strip('()').split(',')))
-                        # Convert elements to integers and form a tuple
-                        elements = tuple(map(int, elements))
-                        tuples.append(elements)
+                    #Para o trabalho do CC, o código é irrelevante, mas vai ser importante para o ASM
+                    msg_with_path.body = f"{code} {path}"
 
-                    # Merge adjacent tuples to form combined tuples
-                    coordinates = [tuples[i] + tuples[i + 1] + tuples[i + 2] for i in range(0, len(tuples), 3)]
-                    """
+                    with open('chatlog.txt', 'a') as file:
+                        file.write(f"CC - Sending ASM this path {path}\n\n")
 
-                    if code == "0001":
-                        path = self.astar(start_position, end_position)
-                        #print(f"CC - {path}")
-
-                        msg_with_path = Message(to="asm_agent@localhost")
-                        msg_with_path.body = f"0001 {path}"
-                        msg_with_path.set_metadata("performative", "query")
-                        await self.send(msg_with_path)
-
-                        with open('chatlog.txt', 'a') as file:
-                            file.write(f"CC - Sending ASM this path {msg_with_path.body}\n\n")
-
-                    elif code == "0002":
-                        path = self.astar(start_position, end_position)
-                        #print(f"CC - Emergency - {path}")
-
-                        msg_with_path = Message(to="asm_agent@localhost")
-                        msg_with_path.body = f"0002 {path}"
-                        msg_with_path.set_metadata("performative", "query")
-                        await self.send(msg_with_path)
-
-                        with open('chatlog.txt', 'a') as file:
-                            file.write(f"CC - Emergency - Sending ASM this path {msg_with_path.body}\n\n")
-
-
-                    #print(f"CC - Sending ASM the path \n")
-
-
+                    await self.send(msg_with_path)
 
 
             def astar(self, start, end):
+                """
+                Função para calcular o caminho entre dois pontos usando o algoritmo A*
 
+                Este algoritmo foi adaptado do que pode ser encontrado  neste site:
+                https://medium.com/@nicholas.w.swift/easy-a-star-pathfinding-7e6689c7f7b2
+                Apenas adaptamos o que estava feito ao nosso código e alteramos para
+                aceitar matrizes com 3 dimensões
+                """
                 start_node = Node(None, start)
                 start_node.g = start_node.h = start_node.f = 0
                 end_node = Node(None, end)
                 end_node.g = end_node.h = end_node.f = 0
 
                 open_list = []
+                open_list.append(start_node)
                 closed_list = []
 
-                open_list.append(start_node)
-                #print(f"{start} -> {end}")
-                #print(self.agent.environment.matrix[end[0]][end[1]][end[2]])
                 while (len(open_list) > 0):
                     current_node = open_list[0]
                     current_index = 0
@@ -887,13 +851,9 @@ class CentralCoordinationAgent(Agent):
 
                     open_list.pop(current_index)
                     closed_list.append(current_node)
-                    #print(len(open_list))
-                    #print(current_node.position)
-                    #print("-----------------------")
 
                     # Found the goal
                     if current_node == end_node:
-                        #print("Got path!")
                         path = []
                         current = current_node
                         while current is not None:
@@ -947,23 +907,8 @@ class CentralCoordinationAgent(Agent):
                             if child == open_node and child.g > open_node.g:
                                 continue
 
-                            # Add the child to the open list
+                        # Add the child to the open list
                         open_list.append(child)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
         self.add_behaviour(GetPath())
@@ -974,6 +919,7 @@ class CentralCoordinationAgent(Agent):
 
 async def main():
 
+    #Aeroportos
     airport_1 = Airport((0, 0, 0), "airport_1")
     airport_2 = Airport((0, 14, 0), "airport_2")
     airport_3 = Airport((3, 6, 0), "airport_3")
@@ -982,14 +928,13 @@ async def main():
     airport_6 = Airport((14, 0, 0), "airport_6")
     airport_7 = Airport((14, 14, 0), "airport_7")
 
-
     airport_list = [airport_1, airport_2, airport_3, airport_4, airport_5, airport_6, airport_7]
 
-
-
+    #Ambiente
     environment = Environment(environment_matrix, airport_list)
     environment.build_airports()
 
+    #Limpar o ficheiro com as mensagens
     with open('chatlog.txt', 'w') as file:
         file.truncate(0)
 
@@ -1001,10 +946,6 @@ async def main():
 
     airspace_manager = AirSpaceManager("asm_agent@localhost", "password", environment)
     await airspace_manager.start(auto_register=True)
-
-
-
-
 
     aircraft_agent_1 = AircraftAgent("aircraft_agent_1@localhost", "password", environment, "A1", airport_1)
     await aircraft_agent_1.start(auto_register=True)
@@ -1021,10 +962,6 @@ async def main():
     aircraft_agent_5 = AircraftAgent("aircraft_agent_5@localhost", "password", environment, "A5", airport_5)
     await aircraft_agent_5.start(auto_register=True)
 
-    #aircraft_agent_6 = AircraftAgent("aircraft_agent_6@localhost", "password", environment, "A6", airport_6)
-    #await aircraft_agent_6.start(auto_register=True)
 
 if __name__ == "__main__":
     spade.run(main())
-
-
